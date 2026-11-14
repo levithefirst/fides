@@ -1,0 +1,17 @@
+node_modules/
+.env
+.env.*
+*.env
+.forge/
+.forge-*
+forge-*.log
+*.log
+npm-debug.log*
+coverage/
+dist/
+.DS_Store
+.idea/
+.vscode/
+*.swp
+credentials*
+*.pem

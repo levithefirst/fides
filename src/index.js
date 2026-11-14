@@ -1,0 +1,301 @@
+// Forge function handlers referenced from manifest.yml.
+//
+//   resolver           UI Kit board, project page and issue panel (asUser)
+//   installed          avi:forge:installed:app trigger: judge-mode seed (asApp)
+//   dailyScan          scheduledTrigger interval: day (asApp)
+//   list/create/escalate/brief   Rovo agent actions (asUser)
+
+import api from '@forge/api';
+import Resolver from '@forge/resolver';
+import { InvocationError, InvocationErrorCode } from '@forge/events';
+import * as svc from './services.js';
+import * as store from './lib/store.js';
+import * as jira from './lib/atlassian.js';
+import { todayIso, evaluate, upcomingNotices, DEFAULT_LOOKAHEAD_DAYS, shortDate } from './lib/dates.js';
+import { draftBrief, storageToText, DISCLAIMER } from './lib/brief.js';
+
+const friendly = (e) => {
+  if (e instanceof jira.ApiError && e.forbidden) return 'You do not have permission for that in Jira or Confluence.';
+  return e?.message || 'Something went wrong.';
+};
+
+// ---------- UI resolvers ----------
+
+const resolver = new Resolver();
+
+// First open of the board: seed judge-mode data if this is a fresh site,
+// then return the board. Never throws to the UI.
+resolver.define('bootstrap', async () => {
+  const client = api.asUser();
+  let seed = null;
+  try {
+    seed = await svc.judgeModeSeed(client, 'board-open');
+  } catch (e) {
+    seed = { state: 'error', errors: [friendly(e)] };
+  }
+  const board = await svc.boardData(client, { asUser: true });
+  return { ...board, seedResult: seed };
+});
+
+resolver.define('getBoard', async () => svc.boardData(api.asUser(), { asUser: true }));
+
+resolver.define('listProjects', async () => {
+  try {
+    return { ok: true, projects: await jira.listProjects(api.asUser()) };
+  } catch (e) {
+    return { ok: false, error: friendly(e) };
+  }
+});
+
+resolver.define('setProject', async ({ payload }) => {
+  try {
+    const cfg = await svc.ensureConfig(api.asUser(), payload.projectKey);
+    return { ok: true, config: cfg };
+  } catch (e) {
+    return { ok: false, error: friendly(e) };
+  }
+});
+
+resolver.define('loadSamples', async () => {
+  const client = api.asUser();
+  // Explicit request from the board. Still idempotent: existing samples
+  // are reused, never duplicated.
+  try {
+    const r = await svc.judgeModeSeed(client, 'load-samples', { force: true });
+    return { ok: true, seed: r };
+  } catch (e) {
+    return { ok: false, error: friendly(e) };
+  }
+});
+
+resolver.define('createAgreement', async ({ payload }) => {
+  try {
+    const a = await svc.createAgreement(api.asUser(), payload);
+    return { ok: true, agreement: a };
+  } catch (e) {
+    return { ok: false, error: friendly(e) };
+  }
+});
+
+resolver.define('runScanNow', async () => {
+  const stamp = await svc.runScan(api.asUser(), 'manual (board)');
+  return { ok: stamp.ok, lastRun: stamp };
+});
+
+resolver.define('createReview', async ({ payload }) => {
+  try {
+    const client = api.asUser();
+    const agreements = await svc.visibleAgreements(client, { asUser: true });
+    const a = svc.resolveAgreement(agreements, payload.issueId);
+    if (!a) return { ok: false, error: 'Agreement not found or not visible to you.' };
+    return { ok: true, ...(await svc.ensureReviewIssue(client, a, { reason: 'requested from the board' })) };
+  } catch (e) {
+    return { ok: false, error: friendly(e) };
+  }
+});
+
+resolver.define('linkPage', async ({ payload }) => {
+  try {
+    const client = api.asUser();
+    const pageId = jira.parsePageRef(payload.pageRef);
+    if (!pageId) return { ok: false, error: 'Paste a Confluence page URL or page id.' };
+    const page = await jira.getPage(client, pageId);
+    const a = await store.get(store.keys.agreement(payload.issueId));
+    if (!a) return { ok: false, error: 'Agreement not found.' };
+    const url = page.base && page.webui ? `${page.base}${page.webui}` : String(payload.pageRef);
+    await store.saveAgreement({ ...a, confluencePageId: pageId, confluenceUrl: url });
+    await jira.addRemoteLink(client, a.issueKey, url, `Contract page: ${a.vendor}`).catch(() => {});
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.forbidden || e.notFound ? 'You cannot read that Confluence page, or it does not exist.' : friendly(e) };
+  }
+});
+
+// Issue panel: show status for an agreement, review, blocker or escalation.
+resolver.define('getPanel', async ({ context }) => {
+  const client = api.asUser();
+  const issueId = String(context?.extension?.issue?.id || '');
+  const issueKey = context?.extension?.issue?.key;
+  const today = todayIso();
+  const base = await svc.siteBase(client).catch(() => '');
+  const direct = issueId ? await store.get(store.keys.agreement(issueId)) : null;
+  if (direct) return { kind: 'agreement', agreement: evaluate(direct, today), baseUrl: base, disclaimer: DISCLAIMER };
+  // Otherwise find a tracked agreement linked to this issue.
+  try {
+    const issue = await jira.getIssue(client, issueKey || issueId);
+    for (const l of issue.links) {
+      const a = l.id ? await store.get(store.keys.agreement(l.id)) : null;
+      if (a) {
+        const kind = issue.labels.includes('fides-escalation')
+          ? 'escalation'
+          : issue.labels.includes('fides-blocker')
+            ? 'blocker'
+            : issue.labels.includes('fides-review')
+              ? 'review'
+              : 'linked';
+        return { kind, agreement: evaluate(a, today), baseUrl: base, disclaimer: DISCLAIMER };
+      }
+    }
+  } catch {
+    // fall through to "not tracked"
+  }
+  return { kind: 'none', disclaimer: DISCLAIMER };
+});
+
+export const handler = resolver.getDefinitions();
+
+// ---------- install trigger: judge mode on install ----------
+
+export async function installed(event) {
+  try {
+    const r = await svc.judgeModeSeed(api.asApp(), 'install');
+    console.log(`Fides judge mode on install: ${r.state}`);
+  } catch (e) {
+    // The app user's permissions are granted eventually; retry on 401/403.
+    if (e instanceof jira.ApiError && e.forbidden) {
+      const retryCount = event?.retryContext?.retryCount || 1;
+      return new InvocationError({
+        retryAfter: Math.min(Math.pow(5, retryCount), 600),
+        retryReason: InvocationErrorCode.FUNCTION_RETRY_REQUEST,
+      });
+    }
+    console.error(`Fides install seed failed: ${e.message}`);
+  }
+}
+
+// ---------- scheduledTrigger (interval: day) ----------
+
+export async function dailyScan() {
+  // Scheduled triggers have no user: api.asApp(). Errors are caught and
+  // stamped in KVS (lastRun), never thrown, because Forge does not retry.
+  try {
+    const stamp = await svc.runScan(api.asApp(), 'scheduledTrigger');
+    console.log(`Fides scan ok=${stamp.ok} reviews=${stamp.reviewsCreated} escalations=${stamp.escalationsCreated}`);
+  } catch (e) {
+    console.error(`Fides scan failed: ${e.message}`);
+  }
+}
+
+// ---------- Rovo agent actions (as the current user) ----------
+
+const ctxIssueKey = (payload) => payload?.context?.jira?.issueKey;
+
+export async function listUpcomingNotices(payload) {
+  try {
+    const client = api.asUser();
+    const days = Number.isFinite(Number(payload?.days)) && Number(payload.days) > 0 ? Number(payload.days) : DEFAULT_LOOKAHEAD_DAYS;
+    const today = todayIso();
+    const agreements = await svc.visibleAgreements(client, { asUser: true });
+    const escKeys = await store.listEscalationKeys();
+    const list = upcomingNotices(agreements, today, days).map((a) => ({
+      issueKey: a.issueKey,
+      vendor: a.vendor,
+      status: a.statusLabel,
+      noticeBy: a.noticeBy,
+      noticeByShort: shortDate(a.noticeBy),
+      daysLeft: a.daysLeft,
+      endDate: a.endDate,
+      owner: a.owner,
+      spend: a.spend,
+      contractPage: a.confluenceUrl || null,
+      escalated: [...escKeys].some((k) => k.startsWith(`esc:${a.issueId}:`)),
+    }));
+    return {
+      today,
+      lookaheadDays: days,
+      rule: 'Due = notice-by within 14 days or past; Upcoming = 15 to 60 days; On track = more than 60 days.',
+      count: list.length,
+      agreements: list,
+      disclaimer: DISCLAIMER,
+    };
+  } catch (e) {
+    return { error: friendly(e), disclaimer: DISCLAIMER };
+  }
+}
+
+export async function createReviewIssueAction(payload) {
+  try {
+    const client = api.asUser();
+    const agreements = await svc.visibleAgreements(client, { asUser: true });
+    const a = svc.resolveAgreement(agreements, payload?.agreement, ctxIssueKey(payload));
+    if (!a) {
+      return {
+        error: 'I could not find that agreement among the ones you can see. Ask me to list upcoming notices first.',
+        known: agreements.map((x) => `${x.issueKey} ${x.vendor}`),
+      };
+    }
+    const r = await svc.ensureReviewIssue(client, a, { reason: 'requested in Rovo Chat' });
+    return {
+      created: r.created,
+      reviewIssue: r.issueKey,
+      url: r.url,
+      agreement: `${a.issueKey} ${a.vendor}`,
+      note: r.created ? 'Review issue created and linked to the agreement.' : 'An open review issue already exists; no duplicate was created.',
+      disclaimer: DISCLAIMER,
+    };
+  } catch (e) {
+    return { error: friendly(e), disclaimer: DISCLAIMER };
+  }
+}
+
+export async function escalateThreatenedMilestones(payload) {
+  try {
+    const client = api.asUser();
+    const agreements = await svc.visibleAgreements(client, { asUser: true });
+    let scope = agreements;
+    if (payload?.agreement || ctxIssueKey(payload)) {
+      const a = svc.resolveAgreement(agreements, payload?.agreement, ctxIssueKey(payload));
+      if (!a) return { error: 'Agreement not found among the ones you can see.' };
+      scope = [a];
+    }
+    const r = await svc.escalateAll(client, scope);
+    return {
+      rule: 'An escalation is created once per agreement and blocker when the blocker is still open and the notice-by or milestone date is within 14 days or past.',
+      created: r.created,
+      alreadyEscalated: r.existing,
+      errors: r.errors,
+      summary: r.created.length
+        ? `${r.created.length} escalation issue(s) created.`
+        : r.existing.length
+          ? 'Threatened milestones were already escalated; no duplicates created.'
+          : 'No open blockers threaten a date in the next 14 days.',
+      disclaimer: DISCLAIMER,
+    };
+  } catch (e) {
+    return { error: friendly(e), disclaimer: DISCLAIMER };
+  }
+}
+
+export async function draftBriefAction(payload) {
+  try {
+    const client = api.asUser();
+    const agreements = await svc.visibleAgreements(client, { asUser: true });
+    let a = svc.resolveAgreement(agreements, payload?.agreement, ctxIssueKey(payload));
+    // Allow a Confluence page id or URL as the input.
+    const pageRef = jira.parsePageRef(payload?.agreement) || payload?.context?.confluence?.contentId;
+    if (!a && pageRef) a = agreements.find((x) => String(x.confluencePageId) === String(pageRef)) || null;
+    if (!a) return { error: 'Agreement not found among the ones you can see.', disclaimer: DISCLAIMER };
+
+    let pageText = null;
+    let pageStatus = a.confluencePageId ? 'none' : 'not-linked';
+    if (a.confluencePageId && payload?.readPage !== false) {
+      try {
+        const page = await jira.getPage(client, a.confluencePageId);
+        pageText = storageToText(page.storage);
+        pageStatus = 'read';
+      } catch (e) {
+        pageStatus = e.forbidden || e.notFound ? 'forbidden' : 'error';
+      }
+    }
+    const blockers = await svc.findBlockers(client, a).catch(() => []);
+    const brief = draftBrief({ agreement: a, today: todayIso(), pageText, pageStatus, blockers });
+    if (pageStatus === 'forbidden') {
+      brief.contractPage.message = 'You do not have permission to read the linked Confluence page, so this brief uses only the stored dates and obligations.';
+    } else if (pageStatus === 'not-linked') {
+      brief.contractPage.message = 'No Confluence contract page is linked yet. Link one from the Fides board for a fuller brief.';
+    }
+    return brief;
+  } catch (e) {
+    return { ok: false, error: friendly(e), disclaimer: DISCLAIMER };
+  }
+}

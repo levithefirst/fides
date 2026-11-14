@@ -1,0 +1,147 @@
+# Fides: agreement notice windows and threatened-milestone escalation.
+# Module keys and fields verified against live Forge docs; see docs/SDK-NOTES.md.
+modules:
+  jira:globalPage:
+    - key: fides-board
+      resource: board
+      resolver:
+        function: resolver
+      render: native
+      title: Fides
+      layout: native
+
+  jira:issuePanel:
+    - key: fides-issue-panel
+      resource: panel
+      resolver:
+        function: resolver
+      render: native
+      title: Fides notice status
+      icon: resource:static;icons/fides.svg
+
+  scheduledTrigger:
+    - key: fides-daily-scan
+      function: daily-scan
+      interval: day
+
+  trigger:
+    - key: fides-on-install
+      function: on-install
+      events:
+        - avi:forge:installed:app
+
+  rovo:agent:
+    - key: fides-agent
+      name: Fides
+      description: Tracks vendor agreement notice windows, opens review issues, escalates threatened milestones and drafts hedged renew, cancel or renegotiate briefs.
+      icon: resource:static;icons/fides.svg
+      prompt: resource:static;agent/prompt.txt
+      conversationStarters:
+        - What notices are due in the next 60 days?
+        - Escalate threatened milestones
+        - Create a review issue for the most urgent agreement
+        - Draft a renew or cancel brief for Helios Payroll
+      actions:
+        - list-upcoming-notices
+        - create-review-issue
+        - escalate-threatened-milestones
+        - draft-brief
+
+  action:
+    - key: list-upcoming-notices
+      name: List upcoming notices
+      function: action-list
+      actionVerb: GET
+      description: |
+        List vendor agreements whose notice-by date is Due (within 14 days or already past) or falls within the next N days (default 60). Returns status, notice-by date, days left, owner, contract page and whether a threatened milestone was escalated.
+      inputs:
+        days:
+          title: Lookahead in days
+          type: integer
+          required: false
+          description: How many days ahead to look. Defaults to 60.
+
+    - key: create-review-issue
+      name: Create review issue
+      function: action-review
+      actionVerb: CREATE
+      description: |
+        Create (or return the existing open) Jira review issue for one agreement on the current site, linked to the agreement issue. Use when the user wants to start a renew, cancel or renegotiate decision.
+      inputs:
+        agreement:
+          title: Agreement
+          type: string
+          required: true
+          description: The agreement's Jira issue key (for example ABC-12) or the vendor name.
+
+    - key: escalate-threatened-milestones
+      name: Escalate threatened milestones
+      function: action-escalate
+      actionVerb: CREATE
+      description: |
+        For agreements whose notice-by or milestone date is within 14 days or past, create exactly one escalation issue per open linked blocker (a question, approval or unmet deliverable). Never duplicates. Optionally limited to one agreement.
+      inputs:
+        agreement:
+          title: Agreement
+          type: string
+          required: false
+          description: Optional issue key or vendor name. Leave empty to check every agreement.
+
+    - key: draft-brief
+      name: Draft renew or cancel brief
+      function: action-brief
+      actionVerb: GET
+      description: |
+        Gather what is needed for a hedged renew, cancel or renegotiate brief for one agreement: dates, obligations, open blockers, what a missed notice could mean, and relevant excerpts from the linked Confluence contract page read as the current user.
+      inputs:
+        agreement:
+          title: Agreement
+          type: string
+          required: true
+          description: The agreement's Jira issue key, vendor name, or linked Confluence page id or URL.
+        readPage:
+          title: Read the contract page
+          type: boolean
+          required: false
+          description: Set to false to skip reading the linked Confluence page. Defaults to true.
+
+  function:
+    - key: resolver
+      handler: index.handler
+    - key: daily-scan
+      handler: index.dailyScan
+      timeoutSeconds: 300
+    - key: on-install
+      handler: index.installed
+      timeoutSeconds: 120
+    - key: action-list
+      handler: index.listUpcomingNotices
+    - key: action-review
+      handler: index.createReviewIssueAction
+    - key: action-escalate
+      handler: index.escalateThreatenedMilestones
+    - key: action-brief
+      handler: index.draftBriefAction
+
+resources:
+  - key: board
+    path: src/frontend/board.jsx
+  - key: panel
+    path: src/frontend/panel.jsx
+  - key: static
+    path: static
+
+permissions:
+  scopes:
+    - read:jira-work
+    - write:jira-work
+    - storage:app
+    - read:page:confluence
+    - write:page:confluence
+    - read:space:confluence
+
+app:
+  # Placeholder. `forge register` fills this in; see docs/HANDOFF.md.
+  id: ari:cloud:ecosystem::app/00000000-0000-0000-0000-000000000000
+  runtime:
+    name: nodejs24.x
