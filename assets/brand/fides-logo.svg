@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">Fides logo</title>
+  <desc id="desc">Two interlocking rounded tesserae — the Fides mark. Transparent background.</desc>
+  <path fill="#77441A" d="M 112.640,350.292 A 73.325 73.325 0 0 1 185.965,276.967 L 580.088,276.967 A 73.325 73.325 0 0 1 653.413,350.292 L 653.413,455.042 L 328.687,455.042 L 328.687,600.383 L 185.965,600.383 A 73.325 73.325 0 0 1 112.640,527.058 Z"/>
+  <path fill="#77441A" d="M 671.744,455.042 L 838.035,455.042 A 73.325 73.325 0 0 1 911.360,528.367 L 911.360,673.708 A 73.325 73.325 0 0 1 838.035,747.033 L 449.150,747.033 A 73.325 73.325 0 0 1 375.825,673.708 L 375.825,504.798 L 671.744,504.798 L 671.744,455.042 Z"/>
+</svg>
