@@ -13,6 +13,7 @@ import * as store from './lib/store.js';
 import * as jira from './lib/atlassian.js';
 import { todayIso, evaluate, upcomingNotices, DEFAULT_LOOKAHEAD_DAYS, shortDate } from './lib/dates.js';
 import { draftBrief, storageToText, DISCLAIMER } from './lib/brief.js';
+import { matchAgreement, confirmation } from './lib/match.js';
 
 const friendly = (e) => {
   if (e instanceof jira.ApiError && e.noCreate) return 'You do not have permission to create issues in that Jira project.';
@@ -228,6 +229,35 @@ export async function dailyScan() {
 
 const ctxIssueKey = (payload) => payload?.context?.jira?.issueKey;
 
+// Resolve the agreement an action was asked about: name first (exact, then
+// fuzzy), issue key only as a fallback, the page context only when no input
+// was given. Every reply carries `resolved` so the agent confirms the key.
+function resolveForAction(agreements, payload) {
+  const ref = payload?.agreement;
+  const m = matchAgreement(agreements, ref, ctxIssueKey(payload));
+  if (m.agreement) {
+    return {
+      a: m.agreement,
+      resolved: {
+        issueKey: m.agreement.issueKey,
+        vendor: m.agreement.vendor,
+        matchedBy: m.matchedBy,
+        confirmation: confirmation(ref, m),
+      },
+    };
+  }
+  if (m.candidates.length) {
+    return {
+      error: `"${ref}" matches more than one agreement. Ask the user which one they mean.`,
+      candidates: m.candidates.map((x) => `${x.issueKey} ${x.vendor}`),
+    };
+  }
+  return {
+    error: `I could not find an agreement matching "${ref ?? ''}" among the ones you can see. Ask me to list upcoming notices first.`,
+    known: agreements.map((x) => `${x.issueKey} ${x.vendor}`),
+  };
+}
+
 export async function listUpcomingNotices(payload) {
   try {
     const client = api.asUser();
@@ -288,15 +318,11 @@ export async function createReviewIssueAction(payload) {
   try {
     const client = api.asUser();
     const agreements = await svc.visibleAgreements(client, { asUser: true });
-    const a = svc.resolveAgreement(agreements, payload?.agreement, ctxIssueKey(payload));
-    if (!a) {
-      return {
-        error: 'I could not find that agreement among the ones you can see. Ask me to list upcoming notices first.',
-        known: agreements.map((x) => `${x.issueKey} ${x.vendor}`),
-      };
-    }
+    const { a, resolved, ...miss } = resolveForAction(agreements, payload);
+    if (!a) return { ...miss, disclaimer: DISCLAIMER };
     const r = await svc.ensureReviewIssue(client, a, { reason: 'requested in Rovo Chat' });
     return {
+      resolved,
       created: r.created,
       reviewIssue: r.issueKey,
       url: r.url,
@@ -314,13 +340,19 @@ export async function escalateThreatenedMilestones(payload) {
     const client = api.asUser();
     const agreements = await svc.visibleAgreements(client, { asUser: true });
     let scope = agreements;
+    let resolved = null;
     if (payload?.agreement || ctxIssueKey(payload)) {
-      const a = svc.resolveAgreement(agreements, payload?.agreement, ctxIssueKey(payload));
-      if (!a) return { error: 'Agreement not found among the ones you can see.' };
-      scope = [a];
+      const res = resolveForAction(agreements, payload);
+      if (!res.a) {
+        const { a: _none, resolved: _r, ...miss } = res;
+        return { ...miss, disclaimer: DISCLAIMER };
+      }
+      scope = [res.a];
+      resolved = res.resolved;
     }
     const r = await svc.escalateAll(client, scope);
     return {
+      ...(resolved ? { resolved } : {}),
       rule: 'An escalation is created once per agreement and blocker when the blocker is still open and the notice-by or milestone date is within 14 days or past.',
       created: r.created,
       alreadyEscalated: r.existing,
@@ -337,29 +369,64 @@ export async function escalateThreatenedMilestones(payload) {
   }
 }
 
+// The line the agent must include in every brief, verbatim.
+export function sourceLine(src) {
+  switch (src.status) {
+    case 'read':
+      return `Source: ${src.title || 'Confluence contract page'} (${src.url || 'link unavailable'})`;
+    case 'forbidden':
+      return 'Source: the linked Confluence contract page could not be read because you do not have permission to view it. This brief uses only the dates and obligations stored in Fides.';
+    case 'not-found':
+      return 'Source: the linked Confluence contract page could not be read because it no longer exists or was moved. This brief uses only the dates and obligations stored in Fides.';
+    case 'error':
+      return 'Source: the linked Confluence contract page could not be read (Confluence returned an error). This brief uses only the dates and obligations stored in Fides.';
+    case 'skipped':
+      return 'Source: the Confluence contract page was not read, as requested. This brief uses only the dates and obligations stored in Fides.';
+    default:
+      return 'Source: no Confluence contract page is linked to this agreement. This brief uses only the dates and obligations stored in Fides.';
+  }
+}
+
 export async function draftBriefAction(payload) {
   try {
     const client = api.asUser();
     const agreements = await svc.visibleAgreements(client, { asUser: true });
-    let a = svc.resolveAgreement(agreements, payload?.agreement, ctxIssueKey(payload));
-    // Allow a Confluence page id or URL as the input.
+    // A Confluence page id or URL is also accepted as the input.
     const pageRef = jira.parsePageRef(payload?.agreement) || payload?.context?.confluence?.contentId;
-    if (!a && pageRef) a = agreements.find((x) => String(x.confluencePageId) === String(pageRef)) || null;
-    if (!a) return { error: 'Agreement not found among the ones you can see.', disclaimer: DISCLAIMER };
+    const byPage = pageRef ? agreements.find((x) => String(x.confluencePageId) === String(pageRef)) : null;
+    const res = byPage
+      ? { a: byPage, resolved: { issueKey: byPage.issueKey, vendor: byPage.vendor, matchedBy: 'Confluence page', confirmation: `Resolved the Confluence page ${pageRef} to ${byPage.issueKey} ${byPage.vendor} (matched by Confluence page).` } }
+      : resolveForAction(agreements, payload);
+    const { a, resolved } = res;
+    if (!a) {
+      const { a: _none, resolved: _r, ...miss } = res;
+      return { ok: false, ...miss, disclaimer: DISCLAIMER };
+    }
 
+    // Read the linked contract page as the user, and record exactly what was
+    // (or was not) read so the brief can cite its source.
     let pageText = null;
     let pageStatus = a.confluencePageId ? 'none' : 'not-linked';
-    if (a.confluencePageId && payload?.readPage !== false) {
+    let source = { status: pageStatus, title: null, url: a.confluenceUrl || null };
+    if (a.confluencePageId && payload?.readPage === false) {
+      source = { status: 'skipped', title: null, url: a.confluenceUrl || null };
+    } else if (a.confluencePageId) {
       try {
         const page = await jira.getPage(client, a.confluencePageId);
         pageText = storageToText(page.storage);
         pageStatus = 'read';
+        const url = page.base && page.webui ? `${page.base}${page.webui}` : a.confluenceUrl || null;
+        source = { status: 'read', title: page.title || null, url, pageId: String(a.confluencePageId) };
       } catch (e) {
-        pageStatus = e.forbidden || e.notFound ? 'forbidden' : 'error';
+        pageStatus = e.forbidden ? 'forbidden' : e.notFound ? 'not-found' : 'error';
+        source = { status: pageStatus, title: null, url: a.confluenceUrl || null, pageId: String(a.confluencePageId) };
       }
     }
     const blockers = await svc.findBlockers(client, a).catch(() => []);
-    const brief = draftBrief({ agreement: a, today: todayIso(), pageText, pageStatus, blockers });
+    const brief = draftBrief({ agreement: a, today: todayIso(), pageText, pageStatus: pageStatus === 'not-found' ? 'forbidden' : pageStatus, blockers });
+    brief.resolved = resolved;
+    brief.source = source;
+    brief.sourceLine = sourceLine(source);
     if (brief.ok !== false) {
       brief.escalations = [];
       for (const k of await store.listEscalationKeys()) {
@@ -368,11 +435,7 @@ export async function draftBriefAction(payload) {
         if (v?.issueKey) brief.escalations.push({ issueKey: v.issueKey, blockerKey: v.blockerKey, dateAtRisk: v.dateAtRisk });
       }
     }
-    if (pageStatus === 'forbidden') {
-      brief.contractPage.message = 'You do not have permission to read the linked Confluence page, so this brief uses only the stored dates and obligations.';
-    } else if (pageStatus === 'not-linked') {
-      brief.contractPage.message = 'No Confluence contract page is linked yet. Link one from the Fides board for a fuller brief.';
-    }
+    if (brief.contractPage) brief.contractPage.message = brief.sourceLine;
     return brief;
   } catch (e) {
     return { ok: false, error: friendly(e), disclaimer: DISCLAIMER };

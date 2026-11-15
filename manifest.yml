@@ -73,7 +73,7 @@ modules:
           title: Agreement
           type: string
           required: true
-          description: The agreement's Jira issue key (for example ABC-12) or the vendor name.
+          description: The vendor name exactly as the user said it (for example Northwind Analytics). Use an issue key only if the user typed one. Never guess a key.
 
     - key: escalate-threatened-milestones
       name: Escalate threatened milestones
@@ -86,7 +86,7 @@ modules:
           title: Agreement
           type: string
           required: false
-          description: Optional issue key or vendor name. Leave empty to check every agreement.
+          description: Optional. The vendor name as the user said it, or an issue key only if the user typed one. Leave empty to check every agreement.
 
     - key: draft-brief
       name: Draft renew or cancel brief
@@ -99,7 +99,7 @@ modules:
           title: Agreement
           type: string
           required: true
-          description: The agreement's Jira issue key, vendor name, or linked Confluence page id or URL.
+          description: The vendor name as the user said it (for example Helios Payroll), or a key or Confluence page URL only if the user typed one. Never guess a key.
         readPage:
           title: Read the contract page
           type: boolean

@@ -116,3 +116,54 @@ test('agent prompt and manifest: chained ask uses only the four existing actions
   assert.doesNotMatch(prompt.replace('Never call blockers RFIs.', ''), /\bRFI/);
   assert.doesNotMatch(prompt + manifest, /\u2014/);
 });
+
+// ---------- gaps 5 and 6 through the real action handlers ----------
+
+test('create-review-issue for Northwind Analytics resolves to Northwind, not Helios, and confirms the key', async () => {
+  const actions = await import('../src/index.js');
+  site = fakeSite();
+  await installed({});
+  const helios = [...site.issues.values()].find((i) => /^Helios Payroll agreement/.test(i.summary));
+  const northwind = [...site.issues.values()].find((i) => /^Northwind Analytics agreement/.test(i.summary));
+  // Rovo opened on the Helios issue page: context points at Helios.
+  const r = await actions.createReviewIssueAction({ agreement: 'Northwind Analytics', context: { jira: { issueKey: helios.key } } });
+  assert.equal(r.resolved.issueKey, northwind.key);
+  assert.equal(r.resolved.vendor, 'Northwind Analytics');
+  assert.match(r.resolved.confirmation, new RegExp(`to ${northwind.key} Northwind Analytics`));
+  assert.match(r.agreement, /Northwind Analytics/);
+  const review = site.issues.get(r.reviewIssue);
+  assert.match(review.summary, /^Review: Northwind Analytics/);
+  // Ambiguity is returned, not guessed.
+  const amb = await actions.createReviewIssueAction({ agreement: 'Zzz Unknown Vendor' });
+  assert.match(amb.error, /could not find/);
+});
+
+test('draft-brief cites the Confluence page title and link it read', async () => {
+  const actions = await import('../src/index.js');
+  site = fakeSite();
+  await installed({});
+  const b = await actions.draftBriefAction({ agreement: 'Helios Payroll' });
+  assert.equal(b.source.status, 'read');
+  assert.equal(b.source.title, 'Fides sample contract: Helios Payroll');
+  assert.match(b.source.url, /^https:\/\/example-site\.atlassian\.net\/wiki\//);
+  assert.equal(b.sourceLine, `Source: Fides sample contract: Helios Payroll (${b.source.url})`);
+  assert.equal(b.resolved.vendor, 'Helios Payroll');
+});
+
+test('draft-brief says explicitly when the page cannot be read', async () => {
+  const actions = await import('../src/index.js');
+  site = fakeSite();
+  await installed({});
+  site.state.confluence = false; // the user cannot read Confluence
+  const b = await actions.draftBriefAction({ agreement: 'Helios Payroll' });
+  assert.equal(b.ok, true);
+  assert.equal(b.source.status, 'forbidden');
+  assert.match(b.sourceLine, /^Source: the linked Confluence contract page could not be read because you do not have permission/);
+  assert.deepEqual(b.contractPage.excerpts, []);
+  // Not linked at all is also explicit.
+  site = fakeSite({ confluence: false });
+  fake.kvs.data.clear();
+  await installed({});
+  const nb = await actions.draftBriefAction({ agreement: 'Quay' });
+  assert.match(nb.sourceLine, /^Source: no Confluence contract page is linked/);
+});

@@ -134,6 +134,13 @@ Record the result of A (script output and stopwatch time) in the README acceptan
 5. Cannot create issues: sign in as a user without Create issues permission on a fresh install. The board shows "Fides cannot create issues for you" with the permission to request, not a blank page and not a project picker.
 6. Project picker appears only when projects exist but none could be picked automatically.
 
+### 8F. Agent matching and brief citation (live fixes 5 and 6)
+
+1. Open the Helios agreement issue, open Rovo Chat there, and ask "Create a review issue for Northwind Analytics." The reply must start by confirming the Northwind key (for example "Using CLSD-9 Northwind Analytics"), and the review issue created must say "Review: Northwind Analytics ...", not Helios.
+2. Ask "Create a review issue for Nortwind" (typo). Same result.
+3. Ask "Draft a renew or cancel brief for Helios Payroll." The brief must contain "Source: Fides sample contract: Helios Payroll (link)" with a working link to the page in Confluence.
+4. As a user without access to that Confluence space, ask again. The brief must say the page could not be read because of permissions, and must not quote clause text.
+
 ### 9. Pre-flight the full acceptance list on the demo site
 
 From the README: samples on the current site with no hardcoded IDs, board with three labelled statuses and shapes plus 30/60/90 grouping, last-scan status and footer, issue panel on agreement and escalation issues, all **four** Rovo actions (list, create review, escalate, draft brief), daily scan wired (wait for the first scheduled run about five minutes after deploy and check the last-scan source reads `scheduledTrigger`), no secrets in git (`git grep -nI -e token -e password`).

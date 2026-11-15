@@ -42,7 +42,9 @@ The board's **Ask Fides in Rovo** panel, directly under the Due spotlight, opens
 | `list-upcoming-notices` | `GET` | Lists agreements that are Due or fall within the next N days (default 60), most urgent first, using the same rule as the board. Only issues the user can see. |
 | `create-review-issue` | `CREATE` | Creates (or returns the open) review issue for one agreement on the **current** site, linked to the agreement. No hardcoded IDs. |
 | `escalate-threatened-milestones` | `CREATE` | Applies the escalation rule to one or all agreements. Idempotent: reports existing escalations instead of duplicating them. |
-| `draft-brief` | `GET` | Gathers a hedged renew / cancel / renegotiate brief: timing, open blockers, options, what a missed notice could mean, and quoted excerpts from the linked Confluence page read **as the user**. If the user cannot read the page, it says so and continues from stored obligations. |
+| `draft-brief` | `GET` | Gathers a hedged renew / cancel / renegotiate brief: timing, open blockers, options, what a missed notice could mean, and quoted excerpts from the linked Confluence page read **as the user**. It cites its source ("Source: Fides sample contract: Helios Payroll (link)"); if the page cannot be read, the source line says so explicitly and why. |
+
+Agreements are resolved **by name first** (exact, then contained, then fuzzy with a one-letter typo allowed), and by issue key only as a fallback, so a nearby or guessed key never wins over the vendor the user named. Ambiguous names return the candidates instead of a guess, and every reply confirms the resolved key, for example "Resolved "Northwind Analytics" to CLSD-9 Northwind Analytics (matched by exact name)."
 
 The agent prompt (`static/agent/prompt.txt`) tells it to use only action data, hedge every statement, use the word "blocker" for open questions, approvals and deliverables, and end decision answers with the not-legal-advice line.
 
@@ -50,7 +52,7 @@ The agent prompt (`static/agent/prompt.txt`) tells it to use only action data, h
 
 | Criterion (20% each) | How Fides meets it | Atlassian features used |
 | --- | --- | --- |
-| **Technological Implementation** | A real loop, not a single demo path: structured agreements, a shared status rule used by the board, scan and agent, idempotent escalation (KVS `FAIL_IF_EXISTS` claims plus Jira label guards), install-time and first-open seeding with a lock, permission-aware reads via bulk fetch, 51 tests in CI. | **Forge modules**: `jira:globalPage`, `jira:issuePanel`, `scheduledTrigger` (interval `day`, `api.asApp()`), `trigger` on `avi:forge:installed:app`, Key-Value Store (`@forge/kvs`). **Jira issues and links**: agreements, blockers, review and escalation issues, issue links, remote links. |
+| **Technological Implementation** | A real loop, not a single demo path: structured agreements, a shared status rule used by the board, scan and agent, idempotent escalation (KVS `FAIL_IF_EXISTS` claims plus Jira label guards), install-time and first-open seeding with a lock, permission-aware reads via bulk fetch, 60 tests in CI. | **Forge modules**: `jira:globalPage`, `jira:issuePanel`, `scheduledTrigger` (interval `day`, `api.asApp()`), `trigger` on `avi:forge:installed:app`, Key-Value Store (`@forge/kvs`). **Jira issues and links**: agreements, blockers, review and escalation issues, issue links, remote links. |
 | **Design** | Native UI Kit, ADS tokens, light and dark themes, colourblind-safe chips (shape plus label), 30/60/90 grouping, last-scan status, recoverable empty and error states, one Fides Umber accent. Judge mode means the first screen already shows the product working. | UI Kit (`render: native`), ADS tokens, Rovo bridge `rovo.open` from the board. |
 | **Potential Impact** | Missed notice periods and auto-renewals are a named value-leakage bucket (see Evidence). Fides puts the date, the obligation and the blocker in the tools these teams already use, and acts before the window closes. | **Jira issues** as the system of record, **Confluence contract pages** as the source of terms. |
 | **Innovation / Idea** | Connects contract dates to live work: an open blocker issue threatening a notice date triggers a hedged escalation automatically and through the agent. | **Rovo agent + actions**: `rovo:agent` with four `action` modules (`GET`, `CREATE`). **Confluence**: contract pages read as the user for the brief. |
@@ -103,7 +105,7 @@ Requires **Node 22.x (22.23.4 or later) or 24.x (24.22.1 or later)**, per the li
 ```bash
 npm install -g @forge/cli@latest
 npm ci
-npm test                    # 51 unit and integration tests
+npm test                    # 60 unit and integration tests
 npm run validate:manifest   # offline schema check with @forge/manifest
 ```
 
@@ -132,6 +134,7 @@ src/
   lib/brief.js        Hedged brief drafting and assistive page excerpts
   lib/atlassian.js    Documented Jira REST v3 and Confluence REST v2 calls
   lib/store.js        KVS layout and claims
+  lib/match.js        Name-first agreement matching for Rovo actions
   lib/view.js         Pure board view model: seeding, spotlight and clean-site states
   frontend/board.jsx  Notice board (jira:globalPage, UI Kit)
   frontend/panel.jsx  Issue panel (jira:issuePanel, UI Kit)

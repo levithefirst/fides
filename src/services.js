@@ -17,6 +17,7 @@ import {
 } from './lib/escalation.js';
 import { buildSamples, samplePageTitle, samplePageBody, SAMPLE_VERSION } from './lib/samples.js';
 import { DISCLAIMER } from './lib/brief.js';
+import { matchAgreement } from './lib/match.js';
 
 const sampleLabel = (k) => `fides-sample-${k}`;
 
@@ -99,10 +100,12 @@ export async function createAgreement(client, input, { sample = false, sampleKey
   const ev = evaluate(record, todayIso());
   if (!record.vendor || ev.invalid) throw new ApiError(`Invalid agreement: ${ev.error || 'vendor is required'}`, 400, null);
   const labels = [LABELS.AGREEMENT, ...(sample ? [LABELS.SAMPLE, sampleLabel(sampleKey)] : [])];
+  const summary = `${record.vendor} agreement${sample ? ' (sample)' : ''}: notice by ${ev.noticeBy}`;
+  record.summary = summary;
   const issue = await jira.createIssue(client, {
     projectId: cfg.projectId,
     issueTypeId: cfg.issueTypeId,
-    summary: `${record.vendor} agreement${sample ? ' (sample)' : ''}: notice by ${ev.noticeBy}`,
+    summary,
     description: agreementDescription(record),
     labels,
   });
@@ -139,16 +142,10 @@ export async function visibleAgreements(client, { asUser }) {
   return all.filter((a) => visible.has(String(a.issueId)));
 }
 
-// Resolve "OPS-12", "10042" or "helios" to one agreement.
+// Resolve an agreement reference (vendor name first, then issue key or id;
+// see lib/match.js). Kept as a thin wrapper for the UI resolvers.
 export function resolveAgreement(agreements, ref, contextIssueKey) {
-  const r = String(ref || contextIssueKey || '').trim().toLowerCase();
-  if (!r) return null;
-  return (
-    agreements.find((a) => a.issueKey?.toLowerCase() === r || String(a.issueId) === r) ||
-    agreements.find((a) => a.vendor?.toLowerCase() === r) ||
-    agreements.find((a) => a.vendor?.toLowerCase().includes(r)) ||
-    null
-  );
+  return matchAgreement(agreements, ref, contextIssueKey).agreement;
 }
 
 // ---------- blockers ----------
