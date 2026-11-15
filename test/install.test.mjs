@@ -56,3 +56,63 @@ test('Confluence install event after seeding links the sample pages', async () =
   assert.equal(agreements.filter((a) => a.confluencePageId).length, 4);
   assert.equal(site.pages.size, 4);
 });
+
+test('board resolver never throws: a browse permission failure becomes a message', async () => {
+  const { safeBoard } = await import('../src/index.js');
+  site = fakeSite();
+  await installed({});
+  site.state.canBrowse = false;
+  const b = await safeBoard(site.client);
+  assert.match(b.loadError, /permission/);
+  assert.deepEqual(b.agreements, []);
+});
+
+// ---------- gap 1: the chained Rovo ask, run through the real action handlers ----------
+
+test('chained ask "Is Helios at risk, and what should I do?": list, escalate (idempotent), brief', async () => {
+  const actions = await import('../src/index.js');
+  site = fakeSite();
+  await installed({}); // judge mode already escalated Helios
+  const escBefore = [...site.issues.values()].filter((i) => i.labels.includes('fides-escalation'));
+  assert.equal(escBefore.length, 1);
+
+  // 1. list-upcoming-notices: Helios is Due with its open blocker and escalation.
+  const list = await actions.listUpcomingNotices({ days: 60 });
+  const h = list.agreements.find((a) => a.vendor === 'Helios Payroll');
+  assert.equal(h.status, 'Due');
+  assert.match(h.noticeByRule, /minus 30 days notice/);
+  assert.equal(h.openBlockers.length, 1);
+  assert.match(h.openBlockers[0].summary, /Approval pending/);
+  assert.equal(h.escalations[0].issueKey, escBefore[0].key);
+
+  // 2. escalate-threatened-milestones for Helios: reports the existing issue, creates none.
+  const esc = await actions.escalateThreatenedMilestones({ agreement: 'Helios' });
+  assert.equal(esc.created.length, 0);
+  assert.equal(esc.alreadyEscalated[0].issueKey, escBefore[0].key);
+  assert.equal([...site.issues.values()].filter((i) => i.labels.includes('fides-escalation')).length, 1);
+
+  // 3. draft-brief: hedged options, the escalation key, the disclaimer.
+  const brief = await actions.draftBriefAction({ agreement: 'Helios' });
+  assert.equal(brief.ok, true);
+  assert.deepEqual(brief.options.map((o) => o.option), ['Renew', 'Cancel', 'Renegotiate']);
+  assert.equal(brief.escalations[0].issueKey, escBefore[0].key);
+  assert.equal(brief.openBlockers.length, 1);
+  assert.equal(brief.disclaimer, 'Fides tracks dates and obligations; it is not legal advice.');
+  assert.ok(brief.whatAMissCouldMean.every((l) => /\bmay\b|\bcould\b/.test(l)));
+});
+
+test('agent prompt and manifest: chained ask uses only the four existing actions', async () => {
+  const fs = await import('node:fs');
+  const prompt = fs.readFileSync(new URL('../static/agent/prompt.txt', import.meta.url), 'utf8');
+  const manifest = fs.readFileSync(new URL('../manifest.yml', import.meta.url), 'utf8');
+  assert.match(manifest, /- Is Helios at risk, and what should I do\?/);
+  assert.match(prompt, /Is Helios at risk, and what should I do\?/);
+  const order = ['list-upcoming-notices', 'escalate-threatened-milestones', 'draft-brief'].map((k) => prompt.indexOf(k, prompt.indexOf('E. "Is')));
+  assert.ok(order.every((i) => i > 0) && order[0] < order[1] && order[1] < order[2], 'chain order: list, escalate, brief');
+  const referenced = new Set(prompt.match(/\b[a-z]+(?:-[a-z]+){1,3}\b/g).filter((w) => /notices|issue|milestones|brief/.test(w)));
+  const allowed = new Set(['list-upcoming-notices', 'create-review-issue', 'escalate-threatened-milestones', 'draft-brief']);
+  for (const k of referenced) assert.ok(allowed.has(k), `unknown action referenced: ${k}`);
+  assert.match(prompt, /Fides tracks dates and obligations; it is not legal advice\./);
+  assert.doesNotMatch(prompt.replace('Never call blockers RFIs.', ''), /\bRFI/);
+  assert.doesNotMatch(prompt + manifest, /\u2014/);
+});

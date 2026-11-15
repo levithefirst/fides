@@ -37,6 +37,7 @@ modules:
       icon: resource:static;icons/fides.svg
       prompt: resource:static;agent/prompt.txt
       conversationStarters:
+        - Is Helios at risk, and what should I do?
         - What notices are due in the next 60 days?
         - Escalate threatened milestones
         - Create a review issue for the most urgent agreement

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import ForgeReconciler, {
   Box,
   Button,
@@ -27,10 +27,11 @@ import ForgeReconciler, {
 } from '@forge/react';
 import { invoke, rovo } from '@forge/bridge';
 import { StatusChip, UmberRule, Footer, card } from './components';
+import { deriveBoardView } from '../lib/view.js';
 
 const AGENT = { type: 'forge', agentKey: 'fides-agent', agentName: 'Fides' };
 
-// The four Rovo actions, front and centre.
+// The four Rovo actions, one button each, after the chained ask.
 const AGENT_ACTIONS = [
   { label: 'List upcoming notices', prompt: 'List the agreements with notices due in the next 60 days.' },
   { label: 'Create a review issue', prompt: 'Create a review issue for the most urgent Due agreement.' },
@@ -88,15 +89,33 @@ function AgreementTable({ items, base, escalatedIds, onReview, onLinkPage, busy 
             <Link href={browse(base, a.issueKey)} openNewTab={false}>
               {`${a.issueKey}  ${a.vendor}`}
             </Link>
-            {escalatedIds.has(String(a.issueId)) ? (
-              <Text size="small" color="color.text.danger">
-                Escalated: open blocker
-              </Text>
+            {(a.openBlockers || []).map((bl) => (
+              <Inline key={bl.key} space="space.050" shouldWrap>
+                <Text size="small">Open blocker:</Text>
+                <Link href={bl.url || browse(base, bl.key)}>{bl.key}</Link>
+              </Inline>
+            ))}
+            {(a.escalations || []).map((e) => (
+              <Inline key={e.issueKey} space="space.050" shouldWrap>
+                <Text size="small" color="color.text.danger">Escalated:</Text>
+                <Link href={e.url || browse(base, e.issueKey)}>{e.issueKey}</Link>
+              </Inline>
+            ))}
+            {!(a.escalations || []).length && escalatedIds.has(String(a.issueId)) ? (
+              <Text size="small" color="color.text.danger">Escalated: open blocker</Text>
             ) : null}
           </Stack>
         ),
       },
-      { key: 'noticeBy', content: <Text>{a.noticeBy}</Text> },
+      {
+        key: 'noticeBy',
+        content: (
+          <Stack space="space.025">
+            <Text>{a.noticeBy}</Text>
+            <Text size="small" color="color.text.subtle">{`end ${a.endDate} minus ${a.noticeDays} days`}</Text>
+          </Stack>
+        ),
+      },
       { key: 'days', content: <Text>{a.daysLeft < 0 ? `${-a.daysLeft} days ago` : `${a.daysLeft}`}</Text> },
       { key: 'owner', content: <Text>{a.owner || 'n/a'}</Text> },
       {
@@ -233,27 +252,31 @@ function ProjectPicker({ onPicked }) {
   );
 }
 
-function AskFides() {
-  const [rovoOk, setRovoOk] = useState(true);
-  useEffect(() => {
-    rovo.isEnabled().then(setRovoOk).catch(() => setRovoOk(false));
-  }, []);
-  const open = (prompt) => rovo.open({ ...AGENT, prompt }).catch(() => setRovoOk(false));
+function AskFides({ rovoEnabled, rovoNote, spotlight }) {
+  const [failed, setFailed] = useState(false);
+  const open = (prompt) => rovo.open({ ...AGENT, prompt }).catch(() => setFailed(true));
+  const disabled = !rovoEnabled || failed;
+  const chained = spotlight?.askPrompt || 'Is Helios at risk, and what should I do?';
   return (
     <Box xcss={card}>
       <Stack space="space.100">
-        <Heading size="small">Ask Fides in Rovo</Heading>
-        <Text color="color.text.subtle">The Fides agent acts through four actions, as you, with your permissions.</Text>
+        <Inline space="space.100" alignBlock="center" shouldWrap>
+          <Heading size="small">Ask Fides in Rovo</Heading>
+          <Text size="small" color="color.text.subtle">Four actions, run as you, with your permissions.</Text>
+        </Inline>
         <Inline space="space.100" shouldWrap>
+          <Button appearance="primary" onClick={() => open(chained)} isDisabled={disabled}>
+            {chained}
+          </Button>
           {AGENT_ACTIONS.map((a) => (
-            <Button key={a.label} onClick={() => open(a.prompt)} isDisabled={!rovoOk}>
+            <Button key={a.label} onClick={() => open(a.prompt)} isDisabled={disabled}>
               {a.label}
             </Button>
           ))}
         </Inline>
-        {!rovoOk ? (
+        {rovoNote || failed ? (
           <Text size="small" color="color.text.subtle">
-            Rovo Chat is not available on this site. Use a site from forge site provision to try the agent.
+            {rovoNote || 'Rovo Chat is needed for the Fides agent. The board, review issues and escalations work without it.'}
           </Text>
         ) : null}
       </Stack>
@@ -261,48 +284,110 @@ function AskFides() {
   );
 }
 
+// First viewport: the most urgent Due agreement with its computed notice-by,
+// its open blocker and its single escalation.
+function Spotlight({ s, base }) {
+  if (!s) return null;
+  return (
+    <Box xcss={card}>
+      <Stack space="space.075">
+        <Inline space="space.100" alignBlock="center" shouldWrap>
+          <StatusChip status="DUE" />
+          <Link href={browse(base, s.issueKey)}>{`${s.issueKey}  ${s.vendor}`}</Link>
+          <Text weight="medium">{`Notice by ${s.noticeByShort}, ${s.timing}`}</Text>
+        </Inline>
+        <Text color="color.text.subtle">{s.formula}</Text>
+        {s.blocker ? (
+          <Inline space="space.075" shouldWrap>
+            <Text weight="medium">Open blocker:</Text>
+            <Link href={s.blocker.url || browse(base, s.blocker.key)}>{s.blocker.key}</Link>
+            <Text>{`${s.blocker.summary || ''}${s.blocker.statusName ? ` (${s.blocker.statusName})` : ''}`}</Text>
+          </Inline>
+        ) : (
+          <Text color="color.text.subtle">No open blocker is linked.</Text>
+        )}
+        {s.escalation ? (
+          <Inline space="space.075" shouldWrap>
+            <Text weight="medium">Escalation:</Text>
+            <Link href={s.escalation.url || browse(base, s.escalation.issueKey)}>{s.escalation.issueKey}</Link>
+            <Text>{`this blocker may put the notice date of ${s.noticeByShort} at risk.`}</Text>
+          </Inline>
+        ) : s.blocker ? (
+          <Text color="color.text.subtle">Escalation pending.</Text>
+        ) : null}
+        {s.why ? <Text weight="bold">{s.why}</Text> : null}
+      </Stack>
+    </Box>
+  );
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 function Board() {
   const [data, setData] = useState(null);
+  const [seeding, setSeeding] = useState(false);
+  const [rovoOn, setRovoOn] = useState(null);
   const [group, setGroup] = useState(GROUPS[0]);
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState(null);
   const [modal, setModal] = useState(null);
-  const polls = useRef(0);
 
   const refresh = async () => setData(await invoke('getBoard'));
 
   useEffect(() => {
-    // Judge mode: seed on first open (idempotent), then show the board.
-    invoke('bootstrap').then((d) => {
-      setData(d);
-      if (d?.seedResult?.state === 'running' || d?.seed?.state === 'running') {
-        const t = setInterval(async () => {
-          polls.current += 1;
-          const next = await invoke('getBoard');
-          setData(next);
-          if (next?.seed?.state === 'running' && polls.current <= 20) return;
-          clearInterval(t);
-          // The install-time seed (best effort) finished without completing,
-          // or timed out: seed now as the user, idempotently.
-          if (next?.seed?.state !== 'done' && next?.seed?.state !== 'skipped') setData(await invoke('bootstrap'));
-        }, 1500);
+    rovo.isEnabled().then((v) => setRovoOn(Boolean(v))).catch(() => setRovoOn(false));
+    let finished = false;
+    (async () => {
+      // 1. Show what exists right away (a cheap read, no seeding).
+      const first = await invoke('getBoard').catch(() => null);
+      if (first) setData(first);
+      const st = first?.seed?.state;
+      const needsSeed = st !== 'done' && st !== 'skipped';
+      // 2. Seed (idempotent) while polling, so the Helios row and its
+      //    escalation render as soon as they exist.
+      let poll = null;
+      if (needsSeed) {
+        setSeeding(true);
+        poll = setInterval(async () => {
+          const next = await invoke('getBoard').catch(() => null);
+          if (next && !finished) setData(next);
+        }, 1000);
       }
-    });
+      let res = await invoke('bootstrap').catch(() => null);
+      // The install trigger may hold the seed lock: wait for it, then retry.
+      for (let i = 0; res?.seedResult?.state === 'running' && i < 20; i += 1) {
+        await sleep(1500);
+        res = await invoke('bootstrap').catch(() => null);
+      }
+      finished = true;
+      if (poll) clearInterval(poll);
+      setSeeding(false);
+      if (res) setData(res);
+      else if (!first) setData({ loadError: 'Fides could not reach its backend. Reload the page to retry.', agreements: [], counts: { due: 0, upcoming: 0, onTrack: 0 } });
+    })();
   }, []);
 
-  if (!data) {
+  const view = deriveBoardView(data, { seeding, rovo: rovoOn });
+
+  if (view.mode === 'loading') {
     return (
-      <Stack space="space.200" alignInline="center">
-        <Spinner size="large" label="Loading notice board" />
-        <Text color="color.text.subtle">Loading the notice board. On a fresh site Fides sets up demo agreements first.</Text>
+      <Stack space="space.200">
+        <UmberRule />
+        <Heading size="large">Notice board</Heading>
+        <SectionMessage appearance="information" title={view.banner.title}>
+          <Inline space="space.100" alignBlock="center">
+            <Spinner size="small" label="Loading" />
+            <Text>{view.banner.text}</Text>
+          </Inline>
+        </SectionMessage>
       </Stack>
     );
   }
 
-  const seedState = data.seed?.state;
   const escalatedIds = new Set((data.escalations || []).map((e) => String(e.agreementId)));
   const groups = groupRows(data.agreements || [], group.value);
   const invalid = (data.agreements || []).filter((a) => a.invalid);
+  const counts = data.counts || { due: 0, upcoming: 0, onTrack: 0 };
 
   const runScan = async () => {
     setBusy(true);
@@ -319,26 +404,28 @@ function Board() {
   };
   const loadSamples = async () => {
     setBusy(true);
+    setSeeding(true);
     const r = await invoke('loadSamples');
+    setSeeding(false);
     setBusy(false);
     setFlash(r.ok ? `Samples: ${r.seed.state}` : r.error);
     refresh();
   };
 
   return (
-    <Stack space="space.250">
+    <Stack space="space.200">
       <Stack space="space.075">
         <UmberRule />
         <Inline spread="space-between" alignBlock="center" shouldWrap>
           <Stack space="space.050">
             <Heading size="large">Notice board</Heading>
             <Text color="color.text.subtle">
-              {`${data.counts.due} Due · ${data.counts.upcoming} Upcoming · ${data.counts.onTrack} On track · today ${data.today}`}
+              {`${counts.due} Due · ${counts.upcoming} Upcoming · ${counts.onTrack} On track · today ${data.today || ''}`}
             </Text>
           </Stack>
           <ButtonGroup>
             <Button onClick={() => setModal({ kind: 'add' })}>Add agreement</Button>
-            <Button onClick={runScan} isDisabled={busy}>Run scan now</Button>
+            <Button onClick={runScan} isDisabled={busy || seeding}>Run scan now</Button>
           </ButtonGroup>
         </Inline>
         <Text size="small" color={data.lastRun && !data.lastRun.ok ? 'color.text.danger' : 'color.text.subtle'}>
@@ -350,39 +437,26 @@ function Board() {
         </Text>
       </Stack>
 
+      {view.banner ? (
+        <SectionMessage appearance={view.banner.appearance} title={view.banner.title}>
+          <Inline space="space.100" alignBlock="center">
+            {view.banner.spinner ? <Spinner size="small" label="Seeding" /> : null}
+            <Text>{view.banner.text}</Text>
+          </Inline>
+        </SectionMessage>
+      ) : null}
+
+      <Spotlight s={view.spotlight} base={data.baseUrl} />
+
+      <AskFides rovoEnabled={view.rovoEnabled} rovoNote={view.rovoNote} spotlight={view.spotlight} />
+
       {flash ? (
         <SectionMessage appearance="information">
           <Text>{flash}</Text>
         </SectionMessage>
       ) : null}
 
-      {seedState === 'running' ? (
-        <SectionMessage appearance="information" title="Setting up demo agreements">
-          <Inline space="space.100" alignBlock="center">
-            <Spinner size="small" label="Seeding" />
-            <Text>Creating sample agreements, a blocker and the escalation on this site.</Text>
-          </Inline>
-        </SectionMessage>
-      ) : null}
-
-      {seedState === 'needs-project' || (!data.config?.projectKey && seedState !== 'running') ? (
-        <ProjectPicker onPicked={loadSamples} />
-      ) : null}
-
-      {data.escalations?.length ? (
-        <SectionMessage appearance="warning" title="Threatened milestones escalated">
-          <Stack space="space.050">
-            {data.escalations.map((e) => (
-              <Inline key={e.issueKey} space="space.075" shouldWrap>
-                <Link href={e.url || "#"}>{e.issueKey}</Link>
-                <Text>{`${e.vendor}: open blocker ${e.blockerKey} may put the ${e.riskKind === 'milestone' ? 'milestone' : 'notice'} date of ${e.dateAtRisk} at risk.`}</Text>
-              </Inline>
-            ))}
-          </Stack>
-        </SectionMessage>
-      ) : null}
-
-      <AskFides />
+      {view.showPicker ? <ProjectPicker onPicked={loadSamples} /> : null}
 
       {data.agreements?.length ? (
         <Stack space="space.200">
@@ -409,8 +483,9 @@ function Board() {
               <Text>{invalid.map((a) => a.issueKey || a.vendor).join(', ')}</Text>
             </SectionMessage>
           ) : null}
+          {view.confluenceNote ? <Text size="small" color="color.text.subtle">{view.confluenceNote}</Text> : null}
         </Stack>
-      ) : seedState !== 'running' ? (
+      ) : view.showEmpty ? (
         <EmptyState
           header="No agreements yet"
           description="Load sample agreements to see Due, Upcoming and On track notices, or add your first agreement."

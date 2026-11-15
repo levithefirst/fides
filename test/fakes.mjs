@@ -50,14 +50,15 @@ function matchesJql(issue, jql) {
   });
 }
 
-export function fakeSite({ latencyMs = 0, confluence = true, projects = [{ id: '10000', key: 'OPS', name: 'Operations' }] } = {}) {
+export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true, projects = [{ id: '10000', key: 'OPS', name: 'Operations' }] } = {}) {
   const issues = new Map(); // key -> issue
   const pages = new Map();
   const calls = [];
   let nextIssue = 10001;
   let nextPage = 900001;
   const base = 'https://example-site.atlassian.net';
-  const state = { confluence };
+  // Toggles for clean-site permission states.
+  const state = { confluence, canCreate: true, createmetaEmpty: false, canBrowse: true };
 
   const json = (status, body) => ({
     status,
@@ -81,14 +82,17 @@ export function fakeSite({ latencyMs = 0, confluence = true, projects = [{ id: '
     const method = opts.method || 'GET';
     const body = opts.body ? JSON.parse(opts.body) : null;
     calls.push(`${method} ${path}`);
-    await sleep(latencyMs);
+    await sleep(latencyMs + (extraLatency ? extraLatency(product, method, String(path.value ?? path), body) : 0));
     const p = String(path.value ?? path);
     let m;
     if (product === 'jira') {
       if (p === '/rest/api/3/serverInfo') return json(200, { baseUrl: base });
       if (p.startsWith('/rest/api/3/project/search')) return json(200, { values: projects });
+      if (/^\/rest\/api\/3\/issue\/createmeta\//.test(p) && state.createmetaEmpty) return json(200, { issueTypes: [] });
       if ((m = /^\/rest\/api\/3\/issue\/createmeta\/([^/]+)\/issuetypes/.exec(p)))
         return json(200, { issueTypes: [{ id: '3', name: 'Epic', hierarchyLevel: 1 }, { id: '1', name: 'Task', hierarchyLevel: 0, subtask: false }] });
+      if (p === '/rest/api/3/issue' && method === 'POST' && !state.canCreate)
+        return json(400, { errors: { project: 'You do not have permission to create issues in this project.' } });
       if (p === '/rest/api/3/issue' && method === 'POST') {
         const id = String(nextIssue++);
         const proj = projects.find((x) => x.id === body.fields.project.id);
@@ -100,6 +104,7 @@ export function fakeSite({ latencyMs = 0, confluence = true, projects = [{ id: '
         const found = [...issues.values()].filter((i) => matchesJql(i, body.jql)).slice(0, body.maxResults || 50);
         return json(200, { issues: found.map(view), isLast: true });
       }
+      if (p === '/rest/api/3/issue/bulkfetch' && !state.canBrowse) return json(403, { errorMessages: ['Forbidden'] });
       if (p === '/rest/api/3/issue/bulkfetch') {
         const want = new Set(body.issueIdsOrKeys);
         const found = [...issues.values()].filter((i) => want.has(i.id) || want.has(i.key));

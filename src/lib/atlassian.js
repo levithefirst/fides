@@ -18,6 +18,12 @@ export class ApiError extends Error {
   get notFound() {
     return this.status === 404;
   }
+  // Jira reports "no permission to create" as 401/403, or as a 400 whose
+  // message mentions permission; createmeta with no creatable types is
+  // flagged as `noCreate` by pickIssueType.
+  get permissionDenied() {
+    return this.forbidden || this.noCreate === true || (this.status === 400 && /permission/i.test(this.message));
+  }
 }
 
 async function call(client, product, path, { method = 'GET', body } = {}) {
@@ -75,7 +81,13 @@ export async function pickIssueType(client, projectKey) {
   const standard = types.filter((t) => !t.subtask && (t.hierarchyLevel === undefined || t.hierarchyLevel === 0));
   const task = standard.find((t) => String(t.name).toLowerCase() === 'task');
   const chosen = task || standard[0];
-  if (!chosen) throw new ApiError(`No standard issue type available in ${projectKey}`, 400, null);
+  if (!chosen) {
+    // createmeta only lists types the caller can create: empty means no
+    // Create issues permission in this project.
+    const e = new ApiError(`You cannot create issues in ${projectKey}`, 403, null);
+    e.noCreate = true;
+    throw e;
+  }
   return { id: chosen.id, name: chosen.name };
 }
 

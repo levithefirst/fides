@@ -25,9 +25,17 @@ Codegeist 2026 · Track: **Apps for Business Teams** · Bonus: **Best Agents** (
 
 Not a CLM, not a contract-approval router, not a jargon translator, not a budget dashboard. No document upload or PDF extraction. Spend is shown for context only.
 
-## Rovo agent: four actions, front and centre
+## Rovo agent: one real question, four actions
 
-The board's **Ask Fides in Rovo** panel opens Rovo Chat with the Fides agent and a ready prompt for each action.
+Ask Fides **"Is Helios at risk, and what should I do?"** (a conversation starter, and the first button on the board). As the current user, the agent chains the existing actions on its own:
+
+1. `list-upcoming-notices`: finds Helios Payroll as Due, with its computed notice-by (end date minus notice period), its open blocker and its escalation.
+2. Inspects the open blocker ("Approval pending: finance sign-off ...").
+3. `escalate-threatened-milestones` for Helios: idempotent, so it reports the existing escalation issue instead of creating another.
+4. `draft-brief` for Helios: reads the Confluence contract page as the user.
+5. Answers with the risk, why a date reminder is not enough, the escalation key, hedged renew / cancel / renegotiate options, what a missed notice could mean, and the not-legal-advice line.
+
+The board's **Ask Fides in Rovo** panel, directly under the Due spotlight, opens Rovo Chat with that question plus one ready prompt per action.
 
 | Action key | Verb | What it does |
 | --- | --- | --- |
@@ -42,11 +50,30 @@ The agent prompt (`static/agent/prompt.txt`) tells it to use only action data, h
 
 | Criterion (20% each) | How Fides meets it | Atlassian features used |
 | --- | --- | --- |
-| **Technological Implementation** | A real loop, not a single demo path: structured agreements, a shared status rule used by the board, scan and agent, idempotent escalation (KVS `FAIL_IF_EXISTS` claims plus Jira label guards), install-time and first-open seeding with a lock, permission-aware reads via bulk fetch, 35 tests in CI. | **Forge modules**: `jira:globalPage`, `jira:issuePanel`, `scheduledTrigger` (interval `day`, `api.asApp()`), `trigger` on `avi:forge:installed:app`, Key-Value Store (`@forge/kvs`). **Jira issues and links**: agreements, blockers, review and escalation issues, issue links, remote links. |
+| **Technological Implementation** | A real loop, not a single demo path: structured agreements, a shared status rule used by the board, scan and agent, idempotent escalation (KVS `FAIL_IF_EXISTS` claims plus Jira label guards), install-time and first-open seeding with a lock, permission-aware reads via bulk fetch, 51 tests in CI. | **Forge modules**: `jira:globalPage`, `jira:issuePanel`, `scheduledTrigger` (interval `day`, `api.asApp()`), `trigger` on `avi:forge:installed:app`, Key-Value Store (`@forge/kvs`). **Jira issues and links**: agreements, blockers, review and escalation issues, issue links, remote links. |
 | **Design** | Native UI Kit, ADS tokens, light and dark themes, colourblind-safe chips (shape plus label), 30/60/90 grouping, last-scan status, recoverable empty and error states, one Fides Umber accent. Judge mode means the first screen already shows the product working. | UI Kit (`render: native`), ADS tokens, Rovo bridge `rovo.open` from the board. |
 | **Potential Impact** | Missed notice periods and auto-renewals are a named value-leakage bucket (see Evidence). Fides puts the date, the obligation and the blocker in the tools these teams already use, and acts before the window closes. | **Jira issues** as the system of record, **Confluence contract pages** as the source of terms. |
 | **Innovation / Idea** | Connects contract dates to live work: an open blocker issue threatening a notice date triggers a hedged escalation automatically and through the agent. | **Rovo agent + actions**: `rovo:agent` with four `action` modules (`GET`, `CREATE`). **Confluence**: contract pages read as the user for the brief. |
 | **Presentation** | Zero-setup judge mode: install, open the board, see Due / Upcoming / On track and the escalation within 10 seconds. The demo script walks the full loop in under 5 minutes. | `trigger` (install), `jira:globalPage`, **`scheduledTrigger` with `api.asApp()`** shown via the last-scan line, Rovo Chat. |
+
+## What the first screen shows
+
+- **Due spotlight**: the most urgent Due agreement, its computed notice-by ("Notice by 2026-11-21 = end date 2026-12-21 minus 30 days notice"), its open blocker, its single linked escalation, and the line **"A date reminder can't see that this blocker is still open."**
+- **Ask Fides in Rovo** right below, above the fold.
+- Then the full board, grouped by status or 30 / 60 / 90 day window. Due rows also show the notice-by arithmetic, open blockers and escalation keys.
+
+On a cold site the board never shows a silent spinner: it reads what exists, shows **"Seeding sample agreements..."** with progress (for example "1 of 4 sample agreements created, escalation created"), and renders the Helios row and its escalation as soon as they exist, without waiting for all four.
+
+Clean-site states, each with a clear message:
+
+| Situation | What you see |
+| --- | --- |
+| No Rovo Chat on the site | Board, review issues and escalation work; Ask buttons are disabled with "Rovo Chat is needed for the Fides agent." |
+| No Confluence | Agreements and escalation seed; cards offer **Link a page** and a note explains why |
+| User cannot create issues | "Fides cannot create issues for you" with what permission to ask for; never a blank board |
+| User cannot read the agreement issues | "You do not have permission to read the Fides agreement issues in Jira." |
+| No Jira project at all | "Create a project (any template), then reload this page." |
+| Projects exist but none could be picked automatically | Project picker (only in this case) |
 
 ## Judge setup (fresh site, zero manual steps)
 
@@ -59,7 +86,7 @@ The agent prompt (`static/agent/prompt.txt`) tells it to use only action data, h
    - the **escalation issue** for it, created immediately, not on the next daily run;
    - a review issue for the Due agreement.
 4. The board shows all of this, plus the escalation message, within about 10 seconds.
-5. Click any **Ask Fides in Rovo** button, or open Rovo Chat, choose **Fides** and try a conversation starter.
+5. Click **Is Helios at risk, and what should I do?** under the spotlight, or open Rovo Chat, choose **Fides** and pick that conversation starter.
 
 Notes:
 
@@ -76,7 +103,7 @@ Requires **Node 22.x (22.23.4 or later) or 24.x (24.22.1 or later)**, per the li
 ```bash
 npm install -g @forge/cli@latest
 npm ci
-npm test                    # 35 unit and integration tests
+npm test                    # 51 unit and integration tests
 npm run validate:manifest   # offline schema check with @forge/manifest
 ```
 
@@ -105,6 +132,7 @@ src/
   lib/brief.js        Hedged brief drafting and assistive page excerpts
   lib/atlassian.js    Documented Jira REST v3 and Confluence REST v2 calls
   lib/store.js        KVS layout and claims
+  lib/view.js         Pure board view model: seeding, spotlight and clean-site states
   frontend/board.jsx  Notice board (jira:globalPage, UI Kit)
   frontend/panel.jsx  Issue panel (jira:issuePanel, UI Kit)
 static/               Agent prompt and icon

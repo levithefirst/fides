@@ -36,24 +36,36 @@ const browse = (base, key) => (base && key ? `${base}/browse/${key}` : null);
 // Use the stored project, or discover the first project on this site where a
 // standard issue type can be created. Never hardcodes a project key.
 export async function ensureConfig(client, preferredProjectKey) {
+  return (await resolveConfig(client, preferredProjectKey)).cfg;
+}
+
+// Same as ensureConfig, plus why no project could be used:
+//   'no-projects'    the caller can see no Jira project at all
+//   'no-permission'  projects exist but the caller can create issues in none
+//   'needs-project'  auto-pick failed for another reason: offer the picker
+export async function resolveConfig(client, preferredProjectKey) {
   const cfg = (await store.get(store.keys.config)) || {};
-  if (cfg.projectKey && cfg.issueTypeId && !preferredProjectKey) return cfg;
+  if (cfg.projectKey && cfg.issueTypeId && !preferredProjectKey) return { cfg, reason: null };
   const projects = await jira.listProjects(client);
-  const ordered = preferredProjectKey
-    ? projects.filter((p) => p.key === preferredProjectKey)
-    : projects;
+  const ordered = preferredProjectKey ? projects.filter((p) => p.key === preferredProjectKey) : projects;
+  if (!ordered.length) return { cfg: null, reason: preferredProjectKey ? 'needs-project' : 'no-projects', projects: 0 };
+  let denied = 0;
   for (const p of ordered) {
     try {
       const t = await jira.pickIssueType(client, p.key);
       const next = { ...cfg, projectId: p.id, projectKey: p.key, projectName: p.name, issueTypeId: t.id, issueTypeName: t.name };
       await store.set(store.keys.config, next);
-      return next;
+      return { cfg: next, reason: null };
     } catch (e) {
       if (preferredProjectKey) throw e;
+      if (e instanceof ApiError && e.permissionDenied) denied += 1;
     }
   }
-  return null;
+  return { cfg: null, reason: denied === ordered.length ? 'no-permission' : 'needs-project', projects: ordered.length };
 }
+
+export const PERMISSION_MESSAGE =
+  'You do not have permission to create issues in a Jira project on this site, so Fides cannot create sample agreements. Ask a Jira admin for the Create issues permission in one project, then reload this page.';
 
 // ---------- agreements ----------
 
@@ -495,9 +507,9 @@ export async function judgeModeSeed(client, source, { force = false } = {}) {
   try {
     await store.set(store.keys.seed, { state: 'running', at: new Date().toISOString(), source });
     // Independent discovery calls in parallel: they are the critical path.
-    const [real, cfg, base, space] = await Promise.all([
+    const [real, { cfg, reason }, base, space] = await Promise.all([
       hasRealData(client),
-      ensureConfig(client),
+      resolveConfig(client),
       siteBase(client),
       jira.pickSpace(client).catch(() => null),
       jira.linkTypeNames(client).catch(() => null),
@@ -508,44 +520,64 @@ export async function judgeModeSeed(client, source, { force = false } = {}) {
       return s;
     }
     if (!cfg) {
-      const s = { state: 'needs-project', at: new Date().toISOString(), source };
+      const s = {
+        state: reason || 'needs-project',
+        at: new Date().toISOString(),
+        source,
+        ...(reason === 'no-permission' ? { message: PERMISSION_MESSAGE } : {}),
+      };
       await store.set(store.keys.seed, s);
       return s;
     }
     const today = todayIso();
     const samples = buildSamples(today);
-    const results = await Promise.allSettled(samples.map((s) => ensureSample(client, s, cfg, space, base)));
-    const failed = results.filter((r) => r.status === 'rejected').map((r) => r.reason?.message);
-    const seeded = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
-
-    // Fire the threatened-milestone escalation right away, not only on the
-    // daily schedule, so the judge sees it on first load. Review issues for
-    // Due agreements are opened in parallel. Same functions as the scan.
-    const stamp = { at: new Date().toISOString(), source: `judge-mode (${source})`, reviewsCreated: 0, pings: 0, escalationsCreated: 0, errors: [...failed] };
+    const stamp = { at: new Date().toISOString(), source: `judge-mode (${source})`, reviewsCreated: 0, pings: 0, escalationsCreated: 0, errors: [] };
     const existing = await store.listEscalationKeys();
-    const due = seeded.filter((a) => evaluate(a, today).status === STATUS.DUE);
-    await Promise.all([
-      ...due.map(async (a) => {
-        try {
-          const r = a.newBlocker
-            ? await escalateAgreement(client, a, today, existing, { knownBlockers: [a.newBlocker], fresh: true })
-            : await escalateAgreement(client, a, today, existing);
-          stamp.escalationsCreated += r.created.length;
-          stamp.errors.push(...r.errors);
-        } catch (e) {
-          stamp.errors.push(`${a.issueKey}: ${e.message}`);
-        }
-      }),
-      ...due.map(async (a) => {
-        try {
-          if ((await ensureReviewIssue(client, a, { reason: 'judge mode' })).created) stamp.reviewsCreated += 1;
-        } catch (e) {
-          stamp.errors.push(`${a.issueKey}: ${e.message}`);
-        }
-      }),
-    ]);
+
+    // Each sample is its own chain, all in parallel. A Due sample escalates
+    // inside its own chain the moment its blocker exists, so the board (which
+    // polls while seeding) shows the Helios row and its escalation without
+    // waiting for the other three. The review issue is opened alongside.
+    const seedOne = async (s) => {
+      const a = await ensureSample(client, s, cfg, space, base);
+      if (evaluate(a, today).status !== STATUS.DUE) return a;
+      await Promise.all([
+        (async () => {
+          try {
+            const r = a.newBlocker
+              ? await escalateAgreement(client, a, today, existing, { knownBlockers: [a.newBlocker], fresh: true })
+              : await escalateAgreement(client, a, today, existing);
+            stamp.escalationsCreated += r.created.length;
+            stamp.errors.push(...r.errors);
+          } catch (e) {
+            stamp.errors.push(`${a.issueKey}: ${e.message}`);
+          }
+        })(),
+        (async () => {
+          try {
+            if ((await ensureReviewIssue(client, a, { reason: 'judge mode' })).created) stamp.reviewsCreated += 1;
+          } catch (e) {
+            stamp.errors.push(`${a.issueKey}: ${e.message}`);
+          }
+        })(),
+      ]);
+      return a;
+    };
+    const ordered = [...samples].sort((x, y) => (y.blocker ? 1 : 0) - (x.blocker ? 1 : 0)); // Helios first
+    const results = await Promise.allSettled(ordered.map(seedOne));
+    const rejected = results.filter((r) => r.status === 'rejected').map((r) => r.reason);
+    const failed = rejected.map((e) => e?.message);
+    const seeded = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+    stamp.errors.unshift(...failed);
     await Promise.all(seeded.map((a) => a.pending).filter(Boolean));
     const scan = await saveStamp(stamp);
+    // Nothing could be created because the user lacks permission: say so
+    // instead of showing an empty board.
+    if (!seeded.length && rejected.length && rejected.every((e) => e instanceof ApiError && e.permissionDenied)) {
+      const s = { state: 'no-permission', message: PERMISSION_MESSAGE, at: new Date().toISOString(), source, errors: failed.slice(0, 3) };
+      await store.set(store.keys.seed, s);
+      return s;
+    }
     const s = {
       state: failed.length ? 'partial' : 'done',
       version: SAMPLE_VERSION,
@@ -586,6 +618,26 @@ export async function boardData(client, { asUser }) {
   }
   const base = cfg?.baseUrl || (await siteBase(client).catch(() => ''));
   const visibleIds = new Set(agreements.map((a) => String(a.issueId)));
+  // Due agreements carry their live open blockers and linked escalations, so
+  // the first screen shows why a plain date reminder is not enough.
+  await Promise.all(
+    agreements
+      .filter((a) => !a.invalid && a.status === STATUS.DUE)
+      .slice(0, 10)
+      .map(async (a) => {
+        a.escalations = escalations
+          .filter((e) => String(e.agreementId) === String(a.issueId))
+          .map((e) => ({ issueKey: e.issueKey, url: browse(base, e.issueKey), blockerKey: e.blockerKey, dateAtRisk: e.dateAtRisk, riskKind: e.riskKind }));
+        try {
+          a.openBlockers = (await findBlockers(client, a))
+            .filter(isBlockerOpen)
+            .map((b) => ({ key: b.key, summary: b.summary, statusName: b.statusName, url: browse(base, b.key) }));
+        } catch {
+          // Fall back to what the escalation records know.
+          a.openBlockers = a.escalations.map((e) => ({ key: e.blockerKey, summary: null, statusName: null, url: browse(base, e.blockerKey) }));
+        }
+      })
+  );
   return {
     today,
     baseUrl: base,

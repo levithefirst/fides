@@ -216,3 +216,70 @@ test('backfill: Confluence still unavailable means no change and no error spam',
   assert.equal(r.forbidden, true);
   assert.equal(site.pages.size, 0);
 });
+
+// ---------- cold board and clean-site states (gaps 2 and 4) ----------
+
+test('cold board: Helios Due row and its escalation are visible before seeding finishes', async () => {
+  // Make one other sample slow, so "without waiting for all four" is visible.
+  const site = fakeSite({
+    latencyMs: 100,
+    extraLatency: (_p, method, path, body) => (method === 'POST' && path === '/rest/api/3/issue' && /^Quay Support/.test(body?.fields?.summary || '') ? 3000 : 0),
+  });
+  let done = false;
+  let firstSeen = null;
+  const seedP = svc.judgeModeSeed(site.client, 'board-open').then((r) => ((done = true), r));
+  while (!done) {
+    const startedWhileSeeding = !done;
+    const b = await svc.boardData(site.client, { asUser: true });
+    const h = b.agreements.find((a) => a.vendor === 'Helios Payroll');
+    if (!firstSeen && h?.escalations?.length && startedWhileSeeding) firstSeen = { agreements: b.agreements.length, h, seedFinished: done };
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  const seed = await seedP;
+  assert.equal(seed.state, 'done');
+  assert.ok(firstSeen, 'escalation appeared on the board while polling');
+  assert.equal(firstSeen.seedFinished, false, 'escalation visible before the seed call returned');
+  assert.ok(firstSeen.agreements < 4, `rendered with ${firstSeen.agreements} of 4 agreements`);
+  assert.equal(firstSeen.h.openBlockers.length, 1);
+  assert.match(firstSeen.h.openBlockers[0].summary, /Approval pending/);
+});
+
+test('board data: Due agreement carries computed notice-by, open blocker and one escalation', async () => {
+  const site = fakeSite();
+  await svc.judgeModeSeed(site.client, 'board-open');
+  const b = await svc.boardData(site.client, { asUser: true });
+  const h = b.agreements.find((a) => a.vendor === 'Helios Payroll');
+  assert.equal(h.status, 'DUE');
+  assert.ok(h.noticeBy && h.endDate && h.noticeDays);
+  assert.equal(h.openBlockers.length, 1);
+  assert.equal(h.escalations.length, 1);
+  // Closing the blocker removes it from the row.
+  [...site.issues.values()].find((i) => i.labels.includes(LABELS.BLOCKER)).statusCategory = 'done';
+  const after = (await svc.boardData(site.client, { asUser: true })).agreements.find((a) => a.vendor === 'Helios Payroll');
+  assert.equal(after.openBlockers.length, 0);
+});
+
+test('clean site: user who cannot create issues gets no-permission, not a blank board', async () => {
+  const site = fakeSite();
+  site.state.createmetaEmpty = true; // createmeta lists no creatable types
+  const r = await svc.judgeModeSeed(site.client, 'board-open');
+  assert.equal(r.state, 'no-permission');
+  assert.match(r.message, /permission to create issues/);
+  assert.equal(site.issues.size, 0);
+});
+
+test('clean site: create call rejected for permission also ends in no-permission', async () => {
+  const site = fakeSite();
+  site.state.canCreate = false;
+  const r = await svc.judgeModeSeed(site.client, 'board-open');
+  assert.equal(r.state, 'no-permission');
+  // Permission granted later: the next board open seeds normally.
+  site.state.canCreate = true;
+  assert.equal((await svc.judgeModeSeed(site.client, 'board-open')).state, 'done');
+});
+
+test('clean site: no projects at all is reported, picker is not offered', async () => {
+  const site = fakeSite({ projects: [] });
+  const r = await svc.judgeModeSeed(site.client, 'board-open');
+  assert.equal(r.state, 'no-projects');
+});

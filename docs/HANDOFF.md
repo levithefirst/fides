@@ -125,6 +125,15 @@ Why board open and not install time: on a new install Atlassian grants the app u
 
 Record the result of A (script output and stopwatch time) in the README acceptance list. First live run, before these fixes: board rendered in 8.8 s with all four agreements; the install-time poll failed its 10 s budget (47 s), which is now informational.
 
+### 8E. First-screen and clean-site checks (after the brutal-judge fixes)
+
+1. Cold board: on a fresh install, open the board. Within a second you see the labelled **"Seeding sample agreements..."** banner (never a bare spinner), the Helios row and escalation appear while the banner still shows progress, and everything is in place within 10 s.
+2. First viewport, without scrolling: the umber bar, the Due spotlight (Helios Payroll; "Notice by ... = end date ... minus 30 days notice"; open blocker; escalation key; "A date reminder can't see that this blocker is still open."), and the Ask Fides panel with the chained ask as the first button.
+3. No Rovo: on a site without Rovo Chat, the board and escalation still render and the Ask panel says "Rovo Chat is needed for the Fides agent."
+4. No Confluence: before connecting Confluence, cards show **Link a page** and a note under the table explains it.
+5. Cannot create issues: sign in as a user without Create issues permission on a fresh install. The board shows "Fides cannot create issues for you" with the permission to request, not a blank page and not a project picker.
+6. Project picker appears only when projects exist but none could be picked automatically.
+
 ### 9. Pre-flight the full acceptance list on the demo site
 
 From the README: samples on the current site with no hardcoded IDs, board with three labelled statuses and shapes plus 30/60/90 grouping, last-scan status and footer, issue panel on agreement and escalation issues, all **four** Rovo actions (list, create review, escalate, draft brief), daily scan wired (wait for the first scheduled run about five minutes after deploy and check the last-scan source reads `scheduledTrigger`), no secrets in git (`git grep -nI -e token -e password`).
@@ -132,6 +141,7 @@ From the README: samples on the current site with no hardcoded IDs, board with t
 Rovo checks (new, sponsor depth):
 
 1. On the board, click each **Ask Fides in Rovo** button; Rovo Chat opens with the Fides agent and the prompt filled.
+1a. Chained ask (primary demo): "Is Helios at risk, and what should I do?". In Rovo Chat the agent should call, in order, List upcoming notices, Escalate threatened milestones, Draft renew or cancel brief (action cards appear in the chat). The answer must name the open blocker, the **existing** escalation key (CLSD-12 on one-atlas-wptq; no new escalation issue may appear in Jira), hedged renew / cancel / renegotiate options, and end with "Fides tracks dates and obligations; it is not legal advice." If the agent stops after the first action, note it: the prompt says not to stop between steps.
 2. "What notices are due in the next 60 days?" lists Helios first as Due.
 3. "Escalate threatened milestones" reports the existing escalation and creates no duplicate.
 4. "Create a review issue for Helios Payroll" returns the existing open review issue (judge mode opened one) or creates one.

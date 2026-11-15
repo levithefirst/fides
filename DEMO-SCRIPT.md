@@ -30,10 +30,10 @@ Target length: about 4:15. Use a fresh demo site from `forge site provision` wit
 
 ## 2:40 to 4:00. Rovo agent with actions
 
-13. Back on the board, click **List upcoming notices** in **Ask Fides in Rovo**. Rovo Chat opens with the Fides agent. Helios Payroll is listed first as Due.
-14. Click **Escalate threatened milestones**. The agent reports the existing escalation and creates no duplicate.
-15. Ask "Create a review issue for Northwind Analytics." The agent creates a real Jira issue on this site and returns its key. Open it.
-16. Ask "Draft a renew or cancel brief for Helios Payroll." The agent quotes the contract page, lists the open blocker, sets out renew / cancel / renegotiate, says what a missed notice could mean, and ends with "Fides tracks dates and obligations; it is not legal advice."
+13. Back on the board, point at the spotlight line: "A date reminder can't see that this blocker is still open." Click **Is Helios at risk, and what should I do?** Rovo Chat opens with the Fides agent.
+14. Let it run without typing. Narrate the action cards as they appear: it lists notices, finds the open blocker, calls escalate threatened milestones (and reports the existing escalation instead of creating a duplicate), then drafts the brief from the Confluence page.
+15. Read the answer: the risk with the notice-by date, the blocker, the escalation key, renew / cancel / renegotiate options, what a missed notice could mean, and "Fides tracks dates and obligations; it is not legal advice."
+16. Ask "Create a review issue for Northwind Analytics." The agent creates a real Jira issue on this site and returns its key. Open it.
 
 ## 4:00 to 4:15. Close
 
@@ -44,4 +44,4 @@ Target length: about 4:15. Use a fresh demo site from `forge site provision` wit
 - Under 5:00. English audio or captions. Public visibility.
 - No secrets, tokens or personal email addresses on screen.
 - The escalation is shown appearing without manual setup.
-- All four Rovo actions appear.
+- The chained ask shows list, escalate and brief action cards; the create-review step shows the fourth action.

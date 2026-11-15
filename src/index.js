@@ -15,7 +15,8 @@ import { todayIso, evaluate, upcomingNotices, DEFAULT_LOOKAHEAD_DAYS, shortDate 
 import { draftBrief, storageToText, DISCLAIMER } from './lib/brief.js';
 
 const friendly = (e) => {
-  if (e instanceof jira.ApiError && e.forbidden) return 'You do not have permission for that in Jira or Confluence.';
+  if (e instanceof jira.ApiError && e.noCreate) return 'You do not have permission to create issues in that Jira project.';
+  if (e instanceof jira.ApiError && e.permissionDenied) return 'You do not have permission for that in Jira or Confluence.';
   return e?.message || 'Something went wrong.';
 };
 
@@ -36,11 +37,28 @@ resolver.define('bootstrap', async () => {
   // Link sample agreements to their Confluence pages if Confluence became
   // reachable after seeding. No API calls when everything is linked.
   const backfill = await svc.backfillSamplePages(client).catch((e) => ({ errors: [friendly(e)] }));
-  const board = await svc.boardData(client, { asUser: true });
+  const board = await safeBoard(client);
   return { ...board, seedResult: seed, backfill: { linked: backfill.linked?.length || 0, errors: backfill.errors?.slice(0, 3) || [] } };
 });
 
-resolver.define('getBoard', async () => svc.boardData(api.asUser(), { asUser: true }));
+// Never a blank board: any failure comes back as a message the UI shows.
+export async function safeBoard(client) {
+  try {
+    return await svc.boardData(client, { asUser: true });
+  } catch (e) {
+    const perm = e instanceof jira.ApiError && e.permissionDenied;
+    return {
+      loadError: perm ? 'You do not have permission to read the Fides agreement issues in Jira. Ask a Jira admin for Browse projects permission.' : `Fides could not load the board: ${friendly(e)}`,
+      agreements: [],
+      escalations: [],
+      counts: { due: 0, upcoming: 0, onTrack: 0 },
+      seed: await store.get(store.keys.seed).catch(() => null),
+      disclaimer: DISCLAIMER,
+    };
+  }
+}
+
+resolver.define('getBoard', async () => safeBoard(api.asUser()));
 
 resolver.define('listProjects', async () => {
   try {
@@ -181,7 +199,7 @@ export async function installed(event) {
       if (!projects.length) return retryLater(retryCount, 'app permissions not ready');
       const r = await svc.judgeModeSeed(client, 'install');
       console.log(`Fides judge mode on install: ${r.state}`);
-      if (['needs-project', 'partial', 'error'].includes(r.state)) return retryLater(retryCount, `seed ${r.state}`);
+      if (['needs-project', 'no-projects', 'no-permission', 'partial', 'error'].includes(r.state)) return retryLater(retryCount, `seed ${r.state}`);
     }
     const bf = await svc.backfillSamplePages(client);
     if (bf.linked.length) console.log(`Fides install: linked ${bf.linked.length} sample agreement(s) to Confluence pages`);
@@ -217,7 +235,27 @@ export async function listUpcomingNotices(payload) {
     const today = todayIso();
     const agreements = await svc.visibleAgreements(client, { asUser: true });
     const escKeys = await store.listEscalationKeys();
-    const list = upcomingNotices(agreements, today, days).map((a) => ({
+    const escByAgreement = new Map();
+    for (const k of escKeys) {
+      const v = await store.get(k);
+      if (!v?.issueKey) continue;
+      const id = String(v.agreementId);
+      escByAgreement.set(id, [...(escByAgreement.get(id) || []), { issueKey: v.issueKey, blockerKey: v.blockerKey, dateAtRisk: v.dateAtRisk }]);
+    }
+    const notices = upcomingNotices(agreements, today, days);
+    // Open blockers for Due agreements, read as the user, so the agent can
+    // see what a date reminder cannot: the decision is stuck on open work.
+    const blockersById = new Map();
+    await Promise.all(
+      notices
+        .filter((a) => a.status === 'DUE')
+        .slice(0, 10)
+        .map(async (a) => {
+          const b = await svc.findBlockers(client, a).catch(() => []);
+          blockersById.set(String(a.issueId), b.filter((x) => x.statusCategory !== 'done').map((x) => ({ key: x.key, summary: x.summary, status: x.statusName })));
+        })
+    );
+    const list = notices.map((a) => ({
       issueKey: a.issueKey,
       vendor: a.vendor,
       status: a.statusLabel,
@@ -228,7 +266,10 @@ export async function listUpcomingNotices(payload) {
       owner: a.owner,
       spend: a.spend,
       contractPage: a.confluenceUrl || null,
-      escalated: [...escKeys].some((k) => k.startsWith(`esc:${a.issueId}:`)),
+      escalated: escByAgreement.has(String(a.issueId)),
+      escalations: escByAgreement.get(String(a.issueId)) || [],
+      openBlockers: blockersById.get(String(a.issueId)) || [],
+      noticeByRule: `${a.endDate} minus ${a.noticeDays} days notice = ${a.noticeBy}`,
     }));
     return {
       today,
@@ -319,6 +360,14 @@ export async function draftBriefAction(payload) {
     }
     const blockers = await svc.findBlockers(client, a).catch(() => []);
     const brief = draftBrief({ agreement: a, today: todayIso(), pageText, pageStatus, blockers });
+    if (brief.ok !== false) {
+      brief.escalations = [];
+      for (const k of await store.listEscalationKeys()) {
+        if (!k.startsWith(`esc:${a.issueId}:`)) continue;
+        const v = await store.get(k);
+        if (v?.issueKey) brief.escalations.push({ issueKey: v.issueKey, blockerKey: v.blockerKey, dateAtRisk: v.dateAtRisk });
+      }
+    }
     if (pageStatus === 'forbidden') {
       brief.contractPage.message = 'You do not have permission to read the linked Confluence page, so this brief uses only the stored dates and obligations.';
     } else if (pageStatus === 'not-linked') {
