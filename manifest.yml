@@ -141,7 +141,6 @@ permissions:
     - read:space:confluence
 
 app:
-  # Placeholder. `forge register` fills this in; see docs/HANDOFF.md.
-  id: ari:cloud:ecosystem::app/00000000-0000-0000-0000-000000000000
+  id: ari:cloud:ecosystem::app/8014edf9-7ace-467e-9b4b-6ae6d9328c9f
   runtime:
     name: nodejs24.x
