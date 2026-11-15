@@ -113,7 +113,6 @@ modules:
       timeoutSeconds: 300
     - key: on-install
       handler: index.installed
-      timeoutSeconds: 120
     - key: action-list
       handler: index.listUpcomingNotices
     - key: action-review
