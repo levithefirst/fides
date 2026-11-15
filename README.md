@@ -42,7 +42,7 @@ The agent prompt (`static/agent/prompt.txt`) tells it to use only action data, h
 
 | Criterion (20% each) | How Fides meets it | Atlassian features used |
 | --- | --- | --- |
-| **Technological Implementation** | A real loop, not a single demo path: structured agreements, a shared status rule used by the board, scan and agent, idempotent escalation (KVS `FAIL_IF_EXISTS` claims plus Jira label guards), install-time and first-open seeding with a lock, permission-aware reads via bulk fetch, 28 tests in CI. | **Forge modules**: `jira:globalPage`, `jira:issuePanel`, `scheduledTrigger` (interval `day`, `api.asApp()`), `trigger` on `avi:forge:installed:app`, Key-Value Store (`@forge/kvs`). **Jira issues and links**: agreements, blockers, review and escalation issues, issue links, remote links. |
+| **Technological Implementation** | A real loop, not a single demo path: structured agreements, a shared status rule used by the board, scan and agent, idempotent escalation (KVS `FAIL_IF_EXISTS` claims plus Jira label guards), install-time and first-open seeding with a lock, permission-aware reads via bulk fetch, 35 tests in CI. | **Forge modules**: `jira:globalPage`, `jira:issuePanel`, `scheduledTrigger` (interval `day`, `api.asApp()`), `trigger` on `avi:forge:installed:app`, Key-Value Store (`@forge/kvs`). **Jira issues and links**: agreements, blockers, review and escalation issues, issue links, remote links. |
 | **Design** | Native UI Kit, ADS tokens, light and dark themes, colourblind-safe chips (shape plus label), 30/60/90 grouping, last-scan status, recoverable empty and error states, one Fides Umber accent. Judge mode means the first screen already shows the product working. | UI Kit (`render: native`), ADS tokens, Rovo bridge `rovo.open` from the board. |
 | **Potential Impact** | Missed notice periods and auto-renewals are a named value-leakage bucket (see Evidence). Fides puts the date, the obligation and the blocker in the tools these teams already use, and acts before the window closes. | **Jira issues** as the system of record, **Confluence contract pages** as the source of terms. |
 | **Innovation / Idea** | Connects contract dates to live work: an open blocker issue threatening a notice date triggers a hedged escalation automatically and through the agent. | **Rovo agent + actions**: `rovo:agent` with four `action` modules (`GET`, `CREATE`). **Confluence**: contract pages read as the user for the brief. |
@@ -52,7 +52,7 @@ The agent prompt (`static/agent/prompt.txt`) tells it to use only action data, h
 
 1. Install Fides from the Sharing installation link on your site.
 2. Open **Apps > Fides** in Jira.
-3. **Judge mode** has already seeded, or seeds now (idempotently), on the current site:
+3. **Judge mode** seeds on this first board open (idempotently, as you), unless the install trigger already did it in the background:
    - four sample agreements with dates computed from today: Helios Payroll (**Due**), Larkspur Facilities and Northwind Analytics (**Upcoming**), Quay Support (**On track**);
    - sample Confluence contract pages, if Confluence is available to the app;
    - one open blocker on Helios Payroll ("Approval pending: finance sign-off ...");
@@ -63,6 +63,7 @@ The agent prompt (`static/agent/prompt.txt`) tells it to use only action data, h
 
 Notes:
 
+- If Fides is connected to Confluence after Jira, the next board open (or the Confluence install event) links the sample agreements to their contract pages without creating duplicate pages.
 - Seeding is safe to re-run and **skips when real data exists** (any `fides-agreement` issue without the `fides-sample` label, or any non-sample agreement in Fides). The **Load samples** button is an explicit request and seeds anyway, still without duplicates.
 - Fides picks the first project on the site where it can create a standard issue type (Task, or the site's default). If there is none, the board shows a project picker.
 - Rovo Chat must be enabled on the site. Classic `*-dev.atlassian.net` sites often lack it; use a site from `forge site provision`.
@@ -75,7 +76,7 @@ Requires **Node 22.x (22.23.4 or later) or 24.x (24.22.1 or later)**, per the li
 ```bash
 npm install -g @forge/cli@latest
 npm ci
-npm test                    # 28 unit and integration tests
+npm test                    # 35 unit and integration tests
 npm run validate:manifest   # offline schema check with @forge/manifest
 ```
 
@@ -136,19 +137,20 @@ Only these figures are cited:
 ## Acceptance
 
 - [x] `docs/SDK-NOTES.md` pins Node, CLI and runtime from live docs and names official module keys (no invented keys).
-- [ ] `forge deploy` succeeds. **Blocked**: no credentials or provisioned site in the build session; see `docs/HANDOFF.md`.
-- [ ] `forge install --demo-site` succeeds. **Blocked**, same reason.
+- [x] `forge deploy` succeeds (deployed by Fluid).
+- [x] `forge install --demo-site` succeeds (installed on the demo site).
 - [x] Load samples / judge mode seeds the current site (Due, Upcoming, On track) with no hardcoded site, project or issue IDs. *(Verified offline; confirm live.)*
 - [x] Notice board shows Due / Upcoming / On track with shapes and labels, 30/60/90 grouping, last-scan status and the footer. *(Built; confirm live.)*
 - [x] Issue panel shows status on agreement, review, blocker and escalation issues. *(Built; confirm live.)*
-- [ ] Rovo agent is visible in Rovo Chat. **Pending live site.**
-- [ ] `list-upcoming-notices` returns the samples. **Pending live site.**
+- [x] Rovo agent is visible in Rovo Chat.
+- [x] `list-upcoming-notices` returns the samples.
 - [ ] `create-review-issue` creates a real Jira issue on the current site. **Pending live site.**
 - [ ] `escalate-threatened-milestones` reports the judge-mode escalation and never duplicates. **Pending live site.**
 - [ ] `draft-brief` is permission-aware and uses the linked page when readable. **Pending live site.**
 - [x] Daily `scheduledTrigger` (`interval: day`) is in the manifest and wired; errors are caught; last run is visible.
 - [x] Unit tests for date and status rules, the RED window, blocker open/closed and idempotency pass in CI.
-- [ ] Judge mode: seeded board plus escalation visible in under 10 seconds after a fresh install. **Offline simulation passes (about 4.4 s at 400 ms per call); live test in `docs/HANDOFF.md` step 8 pending.**
+- [ ] Judge mode: seeded board plus escalation visible within 10 seconds of **opening the board** after a fresh install. First live run: board in 8.8 s with all four agreements and the escalation; rerun the official check (`docs/HANDOFF.md` step 8A) after the latest redeploy. Install-time seeding is best effort (it waits for app permissions, 47 s on the first run).
+- [ ] Sample agreements link to their Confluence contract pages, including when Confluence is connected after Jira. **Fixed in code (backfill); confirm live after redeploy.**
 - [x] README, LICENSE (Apache-2.0), DEMO-SCRIPT.md, SUBMISSION-DRAFT.md, docs/HANDOFF.md, docs/COLOR-THEME.md present.
 - [x] No API tokens or debug credentials in git.
 - [x] Repo left private. No Devpost submission. No video upload.

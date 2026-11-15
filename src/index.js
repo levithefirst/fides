@@ -33,8 +33,11 @@ resolver.define('bootstrap', async () => {
   } catch (e) {
     seed = { state: 'error', errors: [friendly(e)] };
   }
+  // Link sample agreements to their Confluence pages if Confluence became
+  // reachable after seeding. No API calls when everything is linked.
+  const backfill = await svc.backfillSamplePages(client).catch((e) => ({ errors: [friendly(e)] }));
   const board = await svc.boardData(client, { asUser: true });
-  return { ...board, seedResult: seed };
+  return { ...board, seedResult: seed, backfill: { linked: backfill.linked?.length || 0, errors: backfill.errors?.slice(0, 3) || [] } };
 });
 
 resolver.define('getBoard', async () => svc.boardData(api.asUser(), { asUser: true }));
@@ -146,21 +149,48 @@ export const handler = resolver.getDefinitions();
 
 // ---------- install trigger: judge mode on install ----------
 
+// Best effort. Board open is the guaranteed seeding path; this only gets
+// there first when the app user's permissions are already in place. On a
+// new install they lag (observed ~45 s), so we check readiness first,
+// without taking the seed lock, and retry with back-off. The same event
+// fires when Fides is connected to Confluence, which is when the page
+// backfill links existing sample agreements to their contract pages.
+const INSTALL_BACKOFF_S = [10, 30, 90, 270]; // Forge retries up to 4 times
+
+function retryLater(retryCount, why) {
+  if (retryCount >= INSTALL_BACKOFF_S.length) {
+    console.log(`Fides install: giving up after ${retryCount} retries (${why}); board open will seed.`);
+    return undefined;
+  }
+  const retryAfter = INSTALL_BACKOFF_S[retryCount];
+  console.log(`Fides install: ${why}; retry ${retryCount + 1} in ${retryAfter}s`);
+  return new InvocationError({ retryAfter, retryReason: InvocationErrorCode.FUNCTION_RETRY_REQUEST });
+}
+
 export async function installed(event) {
+  const retryCount = event?.retryContext?.retryCount || 0;
+  const client = api.asApp();
   try {
-    const r = await svc.judgeModeSeed(api.asApp(), 'install');
-    console.log(`Fides judge mode on install: ${r.state}`);
-  } catch (e) {
-    // The app user's permissions are granted eventually; retry on 401/403.
-    if (e instanceof jira.ApiError && e.forbidden) {
-      const retryCount = event?.retryContext?.retryCount || 1;
-      return new InvocationError({
-        retryAfter: Math.min(Math.pow(5, retryCount), 600),
-        retryReason: InvocationErrorCode.FUNCTION_RETRY_REQUEST,
+    const seed = await store.get(store.keys.seed);
+    if (seed?.state !== 'done' && seed?.state !== 'skipped') {
+      // Readiness probe: until permissions propagate the app sees no projects.
+      const projects = await jira.listProjects(client).catch((e) => {
+        if (e instanceof jira.ApiError && e.forbidden) return [];
+        throw e;
       });
+      if (!projects.length) return retryLater(retryCount, 'app permissions not ready');
+      const r = await svc.judgeModeSeed(client, 'install');
+      console.log(`Fides judge mode on install: ${r.state}`);
+      if (['needs-project', 'partial', 'error'].includes(r.state)) return retryLater(retryCount, `seed ${r.state}`);
     }
+    const bf = await svc.backfillSamplePages(client);
+    if (bf.linked.length) console.log(`Fides install: linked ${bf.linked.length} sample agreement(s) to Confluence pages`);
+    if (bf.forbidden) return retryLater(retryCount, 'Confluence permissions not ready');
+  } catch (e) {
+    if (e instanceof jira.ApiError && e.forbidden) return retryLater(retryCount, 'permission error');
     console.error(`Fides install seed failed: ${e.message}`);
   }
+  return undefined;
 }
 
 // ---------- scheduledTrigger (interval: day) ----------

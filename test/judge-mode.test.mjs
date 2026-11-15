@@ -131,3 +131,88 @@ test('explicit Load samples works even when real data exists, without duplicates
   assert.equal(withLabel(site, LABELS.SAMPLE).filter((i) => i.labels.includes(LABELS.AGREEMENT)).length, 4);
   assert.equal(withLabel(site, LABELS.ESCALATION).length, 1);
 });
+
+// ---------- Confluence link backfill (gap 1 / test 4) ----------
+
+const { samplePageTitle } = await import('../src/lib/samples.js');
+const store = await import('../src/lib/store.js');
+
+test('backfill: agreements seeded before Confluence get linked once pages appear; rerun changes nothing', async () => {
+  // Jira install seeds while Confluence is not connected.
+  const site = fakeSite({ confluence: false });
+  await svc.judgeModeSeed(site.client, 'install');
+  let agreements = await store.listAgreements();
+  assert.equal(agreements.length, 4);
+  assert.ok(agreements.every((a) => !a.confluencePageId));
+
+  // Later the Confluence install creates the sample pages in another space.
+  site.state.confluence = true;
+  const pageIds = new Map(agreements.map((a) => [a.issueKey, site.addPage({ title: samplePageTitle(a.vendor) })]));
+  const pagesBefore = site.pages.size;
+
+  const r = await svc.backfillSamplePages(site.client);
+  assert.equal(r.linked.length, 4, JSON.stringify(r.errors));
+  assert.equal(r.created.length, 0, 'existing pages are reused, not recreated');
+  assert.equal(site.pages.size, pagesBefore);
+
+  agreements = await store.listAgreements();
+  for (const a of agreements) {
+    assert.equal(a.confluencePageId, pageIds.get(a.issueKey));
+    assert.match(a.confluenceUrl, /\/wiki\/spaces\/EO\/pages\//);
+    const issue = site.issues.get(a.issueKey);
+    assert.equal(issue.remote.filter((l) => l.url === a.confluenceUrl).length, 1);
+  }
+  // The Helios escalation issue also gets the contract page link.
+  const esc = withLabel(site, LABELS.ESCALATION)[0];
+  assert.equal(esc.remote.length, 1);
+
+  // Rerun: no API calls at all, nothing changes.
+  const snapshot = JSON.stringify([...site.issues.values()].map((i) => i.remote));
+  const callsBefore = site.calls.length;
+  const again = await svc.backfillSamplePages(site.client);
+  assert.equal(again.linked.length, 0);
+  assert.equal(site.calls.length, callsBefore, 'rerun makes no REST calls');
+  assert.equal(JSON.stringify([...site.issues.values()].map((i) => i.remote)), snapshot);
+  assert.equal(site.pages.size, pagesBefore);
+
+  // The board now shows the links.
+  const board = await svc.boardData(site.client, { asUser: true });
+  assert.ok(board.agreements.every((a) => a.confluenceUrl));
+});
+
+test('backfill: a lost page id is re-linked without duplicating the page or the remote link', async () => {
+  const site = fakeSite();
+  await svc.judgeModeSeed(site.client, 'install');
+  const helios = (await store.listAgreements()).find((a) => a.vendor === 'Helios Payroll');
+  const pagesBefore = site.pages.size;
+  // Simulate KVS losing the link data for one agreement.
+  await store.saveAgreement({ ...helios, confluencePageId: null, confluenceUrl: null });
+  await store.del(store.keys.samplePage(helios.sampleKey));
+  const r = await svc.backfillSamplePages(site.client);
+  assert.equal(r.linked.length, 1);
+  assert.equal(r.created.length, 0);
+  assert.equal(site.pages.size, pagesBefore);
+  const issue = site.issues.get(helios.issueKey);
+  assert.equal(issue.remote.length, 1, 'globalId upsert keeps a single remote link');
+});
+
+test('backfill: creates a missing page only when Confluence confirms none exists, and only once', async () => {
+  const site = fakeSite({ confluence: false });
+  await svc.judgeModeSeed(site.client, 'install');
+  site.state.confluence = true;
+  const [a, b] = await Promise.all([svc.backfillSamplePages(site.client), svc.backfillSamplePages(site.client)]);
+  assert.equal(site.pages.size, 4, 'one page per sample even with concurrent runs');
+  assert.equal(a.created.length + b.created.length, 4);
+  await svc.backfillSamplePages(site.client);
+  assert.equal(site.pages.size, 4);
+  assert.ok((await store.listAgreements()).every((x) => x.confluencePageId));
+});
+
+test('backfill: Confluence still unavailable means no change and no error spam', async () => {
+  const site = fakeSite({ confluence: false });
+  await svc.judgeModeSeed(site.client, 'install');
+  const r = await svc.backfillSamplePages(site.client);
+  assert.equal(r.linked.length, 0);
+  assert.equal(r.forbidden, true);
+  assert.equal(site.pages.size, 0);
+});

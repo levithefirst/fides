@@ -2,14 +2,16 @@
 
 Everything that cannot be done from a code session, written for Grok Bot and Fluid. No token values appear here or anywhere in the repo.
 
-## Blocked on CLI / demo site (read first)
+## Status (read first)
 
-This build session did **not** run `forge login`, `forge register`, `forge deploy`, `forge install` or `forge site provision`, by instruction. So:
-
-- `app.id` in `manifest.yml` is a placeholder (`ari:cloud:ecosystem::app/00000000-...`). `forge register` replaces it.
-- `forge lint` was not run (it needs a login). The offline schema check `npm run validate:manifest` passes.
-- Nothing has been deployed or installed. No site was faked. The acceptance items that need a live site are marked as pending in the README.
-- What was verified here: 27 unit and integration tests (`npm test`), manifest schema validation, and a full bundle of the backend and both UI Kit resources.
+- **Deployed and installed** on the demo site `one-atlas-wptq.atlassian.net` by Fluid. App id `ari:cloud:ecosystem::app/8014edf9-7ace-467e-9b4b-6ae6d9328c9f` is registered in `manifest.yml` (commit fd7cb1c).
+- `forge lint` rejected `timeoutSeconds` on the `on-install` function; it was removed (commit cf6fa02).
+- First live run: board rendered in 8.8 s with all four agreements and correct chips; the Helios escalation was created (CLSD-12); Rovo "List upcoming notices" worked; logs clean.
+- Fixed after that run (redeploy needed, no scope change, so `forge deploy` is enough; no `--upgrade`):
+  1. Sample agreements seeded before Confluence was connected are now linked to their pages (install event, board open, daily scan). See step 8C.
+  2. Install-time seeding is best effort with retry and back-off; the official 10 s check is now "open the board after install". See step 8.
+  3. The umber accent bar above the board heading now renders (see `docs/COLOR-THEME.md`).
+- Code sessions do not run `forge login`, `register`, `deploy` or `install`; Fluid deploys.
 
 ## Steps
 
@@ -83,40 +85,45 @@ app:
 
 then `forge deploy`, `forge install --upgrade`, and connect the app to Confluence in the site admin's connected apps page. Record the outcome in `docs/SDK-NOTES.md`, item 3. Official: `https://developer.atlassian.com/platform/forge/app-compatibility/`
 
-### 8. Judge-mode acceptance test (new, scope addendum item 4)
+### 8. Judge-mode acceptance test (scope addendum item 4)
 
-The pass condition: **after a fresh install, the seeded board and the escalation issue are visible in under 10 seconds, with zero manual setup.**
+**The official 10 s check is "open the board after install".** Pass condition: on a fresh install, within 10 seconds of opening **Apps > Fides**, the board shows the seeded agreements and the escalation issue exists, with zero manual setup.
 
-**A. Manual board-open test (primary).** Do this on a site where Fides has never been installed, or after `forge uninstall` (KVS is cleared on uninstall).
+Why board open and not install time: on a new install Atlassian grants the app user its permissions with a delay (live run on one-atlas-wptq: issues appeared 47 s after install). Board-open seeding runs as the person opening the board, so it does not wait for that. Install-time seeding is **best effort**: the `on-install` trigger first probes whether the app can see any project; if not, it returns a retry (10 s, 30 s, 90 s, 270 s back-off, Forge's four retries) without taking the seed lock, so it never blocks the board. If it is still not ready after the last retry, it gives up quietly and board open seeds.
+
+**A. Board-open check (official).** On a site where Fides has never been installed, or after `forge uninstall` (KVS is cleared on uninstall). Open the board **soon after install** (within about 10 s, before the install trigger's first retry can seed), so the check measures the guaranteed path.
 
 1. `forge install --demo-site` (or install from the Sharing link on a second site).
-2. Start a stopwatch and open **Apps > Fides** in Jira.
-3. Stop the stopwatch when all of these are visible:
+2. In a terminal, start the timer script:
+
+   ```bash
+   JIRA_BASE_URL=https://<site>.atlassian.net \
+   ATLASSIAN_EMAIL=memequant@mail.grokbot.com \
+   ATLASSIAN_API_TOKEN=<classic API token from the environment, not FORGE_API_TOKEN> \
+   node scripts/acceptance-live.mjs
+   ```
+
+3. When it prompts, open **Apps > Fides** and press Enter at the same moment. It polls Jira and prints PASS if four sample agreements and exactly one escalation exist within 10 s, and reports how many agreements carry a Confluence page link.
+4. Also confirm visually, with a stopwatch from the same moment, that the board shows:
    - four agreements: Helios Payroll (**Due**, diamond), Larkspur Facilities and Northwind Analytics (**Upcoming**, half square), Quay Support (**On track**, ring);
-   - the amber **Threatened milestones escalated** message naming an escalation issue for Helios Payroll;
-   - a last-scan line with source `judge-mode (install)` or `judge-mode (board-open)`.
-4. Pass if under 10 seconds. Open the escalation issue and check it:
+   - the amber **Threatened milestones escalated** message naming the Helios escalation issue;
+   - a last-scan line with source `judge-mode (board-open)` (or `judge-mode (install)` if install seeding got there first);
+   - the thin umber bar above the "Notice board" heading.
+5. Open the escalation issue and check it:
    - summary like `Escalation: Helios Payroll notice date DD MMM may be at risk (KEY-n)`;
    - description says the blocker "may put the notice date of DD MMM at risk";
-   - linked to the agreement issue and to the blocker issue ("Approval pending: finance sign-off ..."), with a remote link to the Confluence contract page (unless step 7 found Confluence blocked);
+   - linked to the agreement and to the blocker ("Approval pending: finance sign-off ..."), with a remote link to the Confluence contract page once Confluence is connected (see C);
    - footer "Fides tracks dates and obligations; it is not legal advice."
-5. Re-run safety: reload the board three times and click **Run scan now**. There must still be exactly **one** escalation issue (JQL `labels = fides-escalation`) and four sample agreements (`labels = fides-sample AND labels = fides-agreement`).
-6. Real-data skip: on a second fresh site, create any Jira issue labelled `fides-agreement` (without `fides-sample`) **before** installing Fides. Then install and open the board. No samples may appear and the seed state is `skipped` (Fides counts a `fides-agreement` issue without the sample label as real data). Clicking **Load samples** afterwards is an explicit request and does seed them.
+6. Re-run safety: reload the board three times and click **Run scan now**. Still exactly **one** escalation (JQL `labels = fides-escalation`), four sample agreements (`labels = fides-sample AND labels = fides-agreement`), and four sample pages in Confluence (search the title prefix "Fides sample contract:").
+7. Real-data skip: on a second fresh site, create any Jira issue labelled `fides-agreement` (without `fides-sample`) **before** installing Fides. Install and open the board. No samples may appear and the seed state is `skipped`. Clicking **Load samples** afterwards is an explicit request and does seed them.
 
-**B. Install-path poll (secondary).** Right after `forge install` completes on a fresh site:
+**B. Install-time timing (informational, never a pass/fail gate).** `node scripts/acceptance-live.mjs --install` right after `forge install` returns, without opening the board. It reports how long install-time seeding took (expect tens of seconds on a brand-new install) and always exits 0.
 
-```bash
-JIRA_BASE_URL=https://<site>.atlassian.net \
-ATLASSIAN_EMAIL=memequant@mail.grokbot.com \
-ATLASSIAN_API_TOKEN=<classic API token from the environment, not FORGE_API_TOKEN> \
-node scripts/acceptance-live.mjs
-```
+**C. Confluence link backfill (gap fixed after the first live run).** If Jira was installed before Fides was connected to Confluence, the sample agreements were seeded without pages. Now, when Fides is connected to Confluence (the install event fires again), on every board open, and in the daily scan, Fides finds each sample page by its stored page record or by exact title in any space ("Fides sample contract: <vendor>"), creates it only if Confluence confirms none exists, adds the remote link to the agreement plus its review and escalation issues (stable `globalId`, so no duplicates), and stores the page id. To verify on one-atlas-wptq after redeploy: open the board once; every card should show **Open page** instead of **Link a page**, and the agreement issues should each have exactly one "Contract page" link. Reloading changes nothing (it makes no API calls once everything is linked).
 
-It prints PASS when four sample agreements and exactly one escalation exist within 10 seconds of the script starting. A FAIL here with a PASS in test A means the install trigger was waiting on app permissions (documented Forge behaviour). Judges still see the board seeded on first open.
+**D. Offline simulation (CI).** `npm test` runs `test/judge-mode.test.mjs` and `test/install.test.mjs`: a fresh simulated site at 400 ms per REST call seeds the board and the escalation in about 4.4 s (37 calls; about 8.8 s at 800 ms). Also covered: backfill linking, rerun with no changes, no duplicate pages under concurrency, and install retry with back-off. Override latency with `FIDES_SIM_LATENCY_MS`.
 
-**C. Offline simulation (already passing in CI).** `npm test` runs `test/judge-mode.test.mjs`: a fresh simulated site at 400 ms per REST call seeds the board and the escalation in about 4.4 s (37 calls); at 800 ms per call, about 8.8 s. Override with `FIDES_SIM_LATENCY_MS`.
-
-Record the stopwatch time from test A in the README acceptance list.
+Record the result of A (script output and stopwatch time) in the README acceptance list. First live run, before these fixes: board rendered in 8.8 s with all four agreements; the install-time poll failed its 10 s budget (47 s), which is now informational.
 
 ### 9. Pre-flight the full acceptance list on the demo site
 
@@ -162,5 +169,5 @@ A GitHub Actions deploy job can read `FORGE_EMAIL` and `FORGE_API_TOKEN` from re
 | 1. Judge mode | Demo site needs one Jira project and one Confluence space; verify Confluence from the Jira install | Steps 5 and 7 |
 | 2. Sponsor depth | Check all four Rovo actions in Rovo Chat, including the permission case | Step 9 |
 | 3. README criteria table | None (done in README) | |
-| 4. Acceptance test | Run tests 8A and 8B on a fresh install and record the time | Step 8 |
+| 4. Acceptance test | Run the board-open check 8A on a fresh install and record the time; 8B is informational | Step 8 |
 | 5. This log | Keep this table current | |

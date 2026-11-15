@@ -103,7 +103,9 @@ export async function createAgreement(client, input, { sample = false, sampleKey
     createdAt: new Date().toISOString(),
   });
   if (record.confluenceUrl) {
-    const link = jira.addRemoteLink(client, issue.key, record.confluenceUrl, `Contract page: ${record.vendor}`).catch(() => {});
+    const link = jira
+      .addRemoteLink(client, issue.key, record.confluenceUrl, `Contract page: ${record.vendor}`, record.confluencePageId ? jira.pageGlobalId(record.confluencePageId) : undefined)
+      .catch(() => {});
     if (!sample) await link; // judge mode does not wait on it
     else saved.pending = link;
   }
@@ -240,7 +242,9 @@ export async function escalateAgreement(client, agreement, today, existing, { kn
           jira.linkIssues(client, types.relates, issueKey, agreement.issueKey).catch(() => {}),
           jira.linkIssues(client, types.relates, issueKey, plan.blocker.key).catch(() => {}),
           agreement.confluenceUrl
-            ? jira.addRemoteLink(client, issueKey, agreement.confluenceUrl, `Contract page: ${agreement.vendor}`).catch(() => {})
+            ? jira
+                .addRemoteLink(client, issueKey, agreement.confluenceUrl, `Contract page: ${agreement.vendor}`, agreement.confluencePageId ? jira.pageGlobalId(agreement.confluencePageId) : undefined)
+                .catch(() => {})
             : null,
         ]);
       }
@@ -292,6 +296,8 @@ export async function runScan(client, source) {
   const today = todayIso();
   const stamp = { at: startedAt, source, ok: true, reviewsCreated: 0, pings: 0, escalationsCreated: 0, errors: [] };
   try {
+    const bf = await backfillSamplePages(client).catch((e) => ({ errors: [e.message] }));
+    stamp.pagesLinked = bf.linked?.length || 0;
     const agreements = await store.listAgreements();
     // Escalations first: they are the time-critical signal.
     const esc = await escalateAll(client, agreements, today);
@@ -370,6 +376,7 @@ async function ensureSample(client, s, cfg, space, base) {
   }
   const wikiBase = page?.base || (base ? `${base}/wiki` : '');
   const confluenceUrl = page?.webui ? `${wikiBase}${page.webui}` : null;
+  if (page?.id) await store.set(store.keys.samplePage(s.sampleKey), { id: page.id, url: confluenceUrl });
   const agreement = await createAgreement(
     client,
     { ...s, confluencePageId: page?.id || null, confluenceUrl },
@@ -393,6 +400,77 @@ async function ensureSample(client, s, cfg, space, base) {
     return saved;
   }
   return agreement;
+}
+
+// ---------- Confluence link backfill ----------
+
+// Attach a Confluence page to an agreement: remote link on the agreement
+// (required) and on its review and escalation issues (best effort), then
+// store the page id. Remote links use a stable globalId, so a rerun updates
+// rather than duplicates.
+async function linkAgreementPage(client, agreement, pageId, url) {
+  const title = `Contract page: ${agreement.vendor}`;
+  const gid = jira.pageGlobalId(pageId);
+  await jira.addRemoteLink(client, agreement.issueKey, url, title, gid);
+  const related = [];
+  const review = await store.get(store.keys.review(agreement.issueId));
+  if (review?.issueKey) related.push(review.issueKey);
+  for (const k of await store.listEscalationKeys()) {
+    if (!k.startsWith(`esc:${agreement.issueId}:`)) continue;
+    const v = await store.get(k);
+    if (v?.issueKey) related.push(v.issueKey);
+  }
+  await Promise.all(related.map((key) => jira.addRemoteLink(client, key, url, title, gid).catch(() => {})));
+  const fresh = (await store.get(store.keys.agreement(agreement.issueId))) || agreement;
+  await store.saveAgreement({ ...fresh, confluencePageId: pageId, confluenceUrl: url });
+}
+
+// Sample agreements seeded before Confluence was reachable (for example the
+// Jira install ran before Confluence was connected) have no page. Find each
+// sample page by the stored page record or by exact title in any space, and
+// create it only if Confluence answered that none exists. Never duplicates
+// pages; does nothing (no API calls) when every sample is already linked.
+export async function backfillSamplePages(client, { createMissing = true } = {}) {
+  const out = { linked: [], created: [], errors: [], forbidden: false };
+  const todo = (await store.listAgreements()).filter((a) => a.sample && a.sampleKey && a.issueKey && !a.confluencePageId);
+  if (!todo.length) return out;
+  const base = await siteBase(client).catch(() => '');
+  let spacePromise = null;
+  const space = () => (spacePromise ??= jira.pickSpace(client).catch(() => null));
+  await Promise.all(
+    todo.map(async (a) => {
+      try {
+        const urlFor = (page) => (page.webui ? `${page.base || (base ? `${base}/wiki` : '')}${page.webui}` : null);
+        let rec = await store.get(store.keys.samplePage(a.sampleKey));
+        if (!rec?.id) {
+          const title = samplePageTitle(a.vendor);
+          let page = await jira.findPageByTitle(client, null, title); // throws on error: never create blind
+          if (!page) {
+            if (!createMissing) return;
+            const sp = await space();
+            if (!sp) return;
+            // Per-sample lock so a concurrent install event and board open
+            // cannot both create the page.
+            if (!(await store.claim(store.keys.pageLock(a.sampleKey), { at: new Date().toISOString() }, 60))) return;
+            try {
+              page = (await jira.findPageByTitle(client, null, title)) || (await jira.createPage(client, { spaceId: sp.id, title, storage: samplePageBody(a) }));
+              if (page) out.created.push(a.issueKey);
+            } finally {
+              await store.del(store.keys.pageLock(a.sampleKey)).catch(() => {});
+            }
+          }
+          rec = { id: String(page.id), url: urlFor(page) };
+          await store.set(store.keys.samplePage(a.sampleKey), rec);
+        }
+        await linkAgreementPage(client, a, rec.id, rec.url);
+        out.linked.push(a.issueKey);
+      } catch (e) {
+        if (e instanceof ApiError && e.forbidden) out.forbidden = true;
+        out.errors.push(`${a.issueKey}: ${e.message}`);
+      }
+    })
+  );
+  return out;
 }
 
 export async function hasRealData(client) {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Inline, Text, xcss, useTheme } from '@forge/react';
+import { Box, Inline, Text, xcss } from '@forge/react';
 
 // Status chips: tint from ADS tokens, unique shape per status, text label in
 // color.text. Never colour alone. color.text.warning is never used for a
@@ -36,21 +36,34 @@ export function StatusChip({ status }) {
   );
 }
 
-// Fides Umber identity moment: one thin bar on the board header only.
-// UI Kit xcss accepts raw colour values for colour props; the umber hex is
-// switched by the host colour mode. Everything else uses ADS tokens.
+// Fides Umber identity moment: one thin bar above the board heading only.
+// UI Kit 12.5 accepts colour as an ADS token or as a { light, dark } hex
+// object (ThemeHexColor); a raw hex string is dropped, which is why the bar
+// did not render before. Two layers:
+//   inner: Fides Umber via { light: #77441A, dark: #E0AB86 }
+//   outer: color.background.accent.yellow.bolder, a brown-gold token that
+//          shows through if a runtime ever drops the hex object.
+// Thickness comes from a spacing token (padding), not a raw height, so the
+// bar never collapses to zero.
+const umberOuter = xcss({
+  backgroundColor: 'color.background.accent.yellow.bolder',
+  borderRadius: 'border.radius.100',
+  width: '48px',
+  display: 'block',
+});
+const umberInner = xcss({
+  backgroundColor: { light: '#77441A', dark: '#E0AB86' },
+  borderRadius: 'border.radius.100',
+  paddingBlock: 'space.025',
+  width: '48px',
+  display: 'block',
+});
+
 export function UmberRule() {
-  const theme = useTheme();
-  const dark = theme?.colorMode === 'dark';
   return (
-    <Box
-      xcss={xcss({
-        height: '3px',
-        width: '48px',
-        borderRadius: 'border.radius.100',
-        backgroundColor: dark ? '#E0AB86' : '#77441A',
-      })}
-    />
+    <Box xcss={umberOuter}>
+      <Box xcss={umberInner} />
+    </Box>
   );
 }
 

@@ -163,12 +163,16 @@ export async function linkIssues(client, typeName, fromKey, toKey) {
   });
 }
 
-export async function addRemoteLink(client, issueKey, url, title) {
+// With a `globalId`, Jira updates the existing remote link instead of adding
+// a second one, so repeated calls are idempotent.
+export async function addRemoteLink(client, issueKey, url, title, globalId) {
   await call(client, 'jira', route`/rest/api/3/issue/${issueKey}/remotelink`, {
     method: 'POST',
-    body: { object: { url, title: title.slice(0, 250) } },
+    body: { ...(globalId ? { globalId } : {}), object: { url, title: title.slice(0, 250) } },
   });
 }
+
+export const pageGlobalId = (pageId) => `fides-confluence-page-${pageId}`;
 
 export async function addComment(client, issueKey, body) {
   await call(client, 'jira', route`/rest/api/3/issue/${issueKey}/comment`, { method: 'POST', body: { body } });
@@ -187,10 +191,15 @@ export async function getPage(client, pageId) {
   };
 }
 
+// Exact-title lookup. Without a space id it searches every space the caller
+// can see (the sample pages may live in any space, for example one created
+// by a later Confluence install).
 export async function findPageByTitle(client, spaceId, title) {
-  const res = await call(client, 'confluence', route`/wiki/api/v2/pages?space-id=${spaceId}&title=${title}&limit=1`);
-  const p = res?.results?.[0];
-  return p ? { id: p.id, webui: p._links?.webui } : null;
+  const res = spaceId
+    ? await call(client, 'confluence', route`/wiki/api/v2/pages?space-id=${spaceId}&title=${title}&status=current&limit=5`)
+    : await call(client, 'confluence', route`/wiki/api/v2/pages?title=${title}&status=current&limit=5`);
+  const p = (res?.results || []).find((r) => r.title === undefined || r.title === title);
+  return p ? { id: p.id, webui: p._links?.webui, base: res?._links?.base } : null;
 }
 
 export async function pickSpace(client) {

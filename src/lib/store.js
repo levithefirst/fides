@@ -10,6 +10,8 @@
 //   esc:<agreementId>:<blockerId>   escalation claim { issueKey, at }
 //   review:<agreementId>     { issueKey, pingedFor }
 //   sample:<sampleKey>       { issueId } so seeding never duplicates
+//   samplePage:<sampleKey>   { id, url } the sample's Confluence page
+//   lock:page:<sampleKey>    short-lived page-creation lock
 
 import { kvs, WhereConditions } from '@forge/kvs';
 
@@ -17,6 +19,8 @@ export const keys = {
   agreement: (id) => `agreement:${id}`,
   review: (id) => `review:${id}`,
   sample: (k) => `sample:${k}`,
+  samplePage: (k) => `samplePage:${k}`,
+  pageLock: (k) => `lock:page:${k}`,
   config: 'config',
   seed: 'seed',
   seedLock: 'lock:seed',

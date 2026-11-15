@@ -57,6 +57,7 @@ export function fakeSite({ latencyMs = 0, confluence = true, projects = [{ id: '
   let nextIssue = 10001;
   let nextPage = 900001;
   const base = 'https://example-site.atlassian.net';
+  const state = { confluence };
 
   const json = (status, body) => ({
     status,
@@ -113,7 +114,12 @@ export function fakeSite({ latencyMs = 0, confluence = true, projects = [{ id: '
         return json(201);
       }
       if ((m = /^\/rest\/api\/3\/issue\/([^/?]+)\/remotelink$/.exec(p))) {
-        issues.get(m[1]).remote.push(body.object);
+        // Jira upserts when the globalId already exists on the issue.
+        const remote = issues.get(m[1]).remote;
+        const i = body.globalId ? remote.findIndex((r) => r.globalId === body.globalId) : -1;
+        const entry = { ...body.object, globalId: body.globalId };
+        if (i >= 0) remote[i] = entry;
+        else remote.push(entry);
         return json(201, { id: 1 });
       }
       if ((m = /^\/rest\/api\/3\/issue\/([^/?]+)\/comment$/.exec(p))) {
@@ -126,16 +132,20 @@ export function fakeSite({ latencyMs = 0, confluence = true, projects = [{ id: '
       }
     }
     if (product === 'confluence') {
-      if (!confluence) return json(403, { message: 'Confluence not available' });
+      if (!state.confluence) return json(403, { message: 'Confluence not available' });
       if (p.startsWith('/wiki/api/v2/spaces')) return json(200, { results: [{ id: '777', key: 'LEGAL', type: 'global' }] });
       if (p.startsWith('/wiki/api/v2/pages?')) {
         const title = decodeURIComponent(/title=([^&]+)/.exec(p)[1]);
-        const found = [...pages.values()].filter((x) => x.title === title);
-        return json(200, { results: found.map((x) => ({ id: x.id, _links: { webui: `/spaces/LEGAL/pages/${x.id}` } })) });
+        const space = /space-id=([^&]+)/.exec(p)?.[1];
+        const found = [...pages.values()].filter((x) => x.title === title && (!space || x.spaceId === space));
+        return json(200, {
+          results: found.map((x) => ({ id: x.id, title: x.title, _links: { webui: `/spaces/${x.spaceKey}/pages/${x.id}` } })),
+          _links: { base: `${base}/wiki` },
+        });
       }
       if (p === '/wiki/api/v2/pages' && method === 'POST') {
         const id = String(nextPage++);
-        pages.set(id, { id, title: body.title, storage: body.body.value });
+        pages.set(id, { id, title: body.title, storage: body.body.value, spaceId: body.spaceId, spaceKey: 'LEGAL' });
         return json(200, { id, _links: { webui: `/spaces/LEGAL/pages/${id}`, base: `${base}/wiki` } });
       }
       if ((m = /^\/wiki\/api\/v2\/pages\/(\d+)\?/.exec(p))) {
@@ -146,9 +156,17 @@ export function fakeSite({ latencyMs = 0, confluence = true, projects = [{ id: '
     throw new Error(`fake site: unhandled ${product} ${method} ${p}`);
   }
 
+  // Simulate a page created outside this app run (e.g. by a later
+  // Confluence install) in another space.
+  const addPage = ({ title, storage = '<p>x</p>', spaceId = '888', spaceKey = 'EO' }) => {
+    const id = String(nextPage++);
+    pages.set(id, { id, title, storage, spaceId, spaceKey });
+    return id;
+  };
+
   const client = {
     requestJira: (path, opts) => handle('jira', path, opts),
     requestConfluence: (path, opts) => handle('confluence', path, opts),
   };
-  return { client, issues, pages, calls, base };
+  return { client, issues, pages, calls, base, state, addPage };
 }

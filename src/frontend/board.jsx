@@ -280,7 +280,11 @@ function Board() {
           polls.current += 1;
           const next = await invoke('getBoard');
           setData(next);
-          if (next?.seed?.state !== 'running' || polls.current > 20) clearInterval(t);
+          if (next?.seed?.state === 'running' && polls.current <= 20) return;
+          clearInterval(t);
+          // The install-time seed (best effort) finished without completing,
+          // or timed out: seed now as the user, idempotently.
+          if (next?.seed?.state !== 'done' && next?.seed?.state !== 'skipped') setData(await invoke('bootstrap'));
         }, 1500);
       }
     });

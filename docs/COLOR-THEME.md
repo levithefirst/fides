@@ -13,7 +13,8 @@ Rules:
 
 - Umber appears only in the logo and the thin header rule. Never on buttons, links, focus rings, table rows or status chips.
 - Standard buttons keep ADS brand blue. `color.border.focused` stays Atlassian blue.
-- Fallback if the UI Kit runtime rejects a raw hex in `xcss`: `color.border.accent.orange`.
+- How it renders in UI Kit: `Box` colour values must be an ADS token or a `{ light, dark }` hex object; a raw hex string is dropped (that is why the first live build showed no bar). The bar is two layers: an inner `Box` with `{ light: '#77441A', dark: '#E0AB86' }`, over an outer `Box` with `color.background.accent.yellow.bolder`, a brown-gold token that shows through if a runtime ever drops the hex object. Thickness is `paddingBlock: 'space.025'` (4 px total), width 48 px.
+- Never use blue, mint/teal, violet/purple, orange or pink accent tokens for the bar.
 
 ## Everything else: Atlassian Design System tokens
 
