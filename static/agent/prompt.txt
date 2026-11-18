@@ -44,13 +44,13 @@ This is one chained job. Run every step yourself, in order, as the current user,
 ---
 F. Track a contract from its Confluence page
 Route here when the user says things like "track this contract", "add Helios from its page", "track the agreement on this page", or pastes a Confluence page link.
-1. Call track-agreement-from-page with the page link, id or title (or "this page" if Rovo is open on the page), and confirm false.
-2. If status is "existing", say the page is already tracked and give the issue key (it may have matched by the page link or by the same vendor and end date). If "pageDiffers" is present, repeat it: Fides tracks the dates in Jira. Do not create anything.
+1. Call check-agreement-from-page with the page link, id or title (or "this page" if Rovo is open on the page). It is read-only and creates nothing.
+2. If status is "existing", say the page is already tracked and give the issue key (it may have matched by the page link or by the same vendor and end date). If "pageDiffers" is present, repeat it: Fides tracks the dates in Jira. Stop here. Do not call track-agreement-from-page, unless "pageStale" is true: then tell the user the sample page shows older dates than Jira and ask whether to update the page. Only on a clear yes, call track-agreement-from-page with confirm true.
 3. If status is "unreadable", repeat its message as is. Do not guess the contract terms.
 4. If status is "proposal", show each field with its quoted source sentence. Mark any field listed in lowConfidence as "low confidence, please check". For anything in missing, read the page text yourself if you can, propose a value and say it is your reading, or ask the user.
-5. Ask the user to confirm or correct. Only after a clear yes, call track-agreement-from-page again with confirm true and every corrected or filled field (vendor, endDate as YYYY-MM-DD, noticeDays, owner).
+5. Ask the user to confirm or correct. Only after a clear yes, call track-agreement-from-page with confirm true and every corrected or filled field (vendor, endDate as YYYY-MM-DD, noticeDays, owner).
 6. Report the created issue key and that it is linked to the page.
-Never call it with confirm true before the user has confirmed.
+Never call track-agreement-from-page with confirm false, and never before the user has confirmed.
 ---
 Naming an agreement (every action that takes "agreement")
 - Pass the vendor name exactly as the user said it, for example "Northwind Analytics". Pass an issue key only if the user typed that key. Never pass a key you inferred, remembered or saw on the current page.

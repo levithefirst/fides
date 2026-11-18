@@ -485,7 +485,7 @@ export async function runScan(client, source) {
   const today = todayIso();
   const stamp = { at: startedAt, source, ok: true, reviewsCreated: 0, pings: 0, escalationsCreated: 0, errors: [] };
   try {
-    const bf = await backfillSamplePages(client).catch((e) => ({ errors: [e.message] }));
+    const bf = await backfillSamplePages(client, { source: 'scan' }).catch((e) => ({ errors: [e.message] }));
     stamp.pagesLinked = bf.linked?.length || 0;
     const agreements = await loadAgreements(client);
     // Escalations first: they are the time-critical signal.
@@ -719,11 +719,11 @@ const pageMatchesRecord = (storage, a) =>
 // by an earlier seed), rewrite that page in place: same id, next version,
 // body from samplePageBody. Never creates a page, never touches a page that
 // is not a Fides sample page. Remembered per page so it runs once.
-export async function syncSamplePage(client, agreement) {
+export async function syncSamplePage(client, agreement, { force = false } = {}) {
   if (!agreement?.sample || !agreement.confluencePageId || !agreement.endDate) return 'skipped';
   const marker = `${agreement.endDate}|${agreement.noticeDays}`;
   const k = `pageSynced:${agreement.confluencePageId}`;
-  if ((await store.get(k).catch(() => null)) === marker) return 'in-sync';
+  if (!force && (await store.get(k).catch(() => null)) === marker) return 'in-sync';
   const page = await jira.getPage(client, agreement.confluencePageId);
   if (!String(page.title || '').startsWith(SAMPLE_PAGE_PREFIX)) return 'not-a-sample-page';
   let result = 'in-sync';
@@ -735,19 +735,58 @@ export async function syncSamplePage(client, agreement) {
   return result;
 }
 
-export async function syncSamplePages(client, agreements) {
-  const out = { updated: [], errors: [] };
+// Do the sample pages need a sync? Read-only: reads each page, never writes.
+export async function samplePagesStale(client, agreements) {
+  const out = [];
+  for (const a of agreements.filter((x) => x.sample && x.confluencePageId && x.endDate)) {
+    try {
+      const page = await jira.getPage(client, a.confluencePageId);
+      if (String(page.title || '').startsWith(SAMPLE_PAGE_PREFIX) && !pageMatchesRecord(page.storage, a)) out.push(a.issueKey);
+    } catch {
+      // unreadable: not reported as stale
+    }
+  }
+  return out;
+}
+
+// Confluence is reached through the install the code is running in. From the
+// Jira install the call may be refused; remember that for an hour instead of
+// failing on every board open, and say so in the logs.
+const CONFLUENCE_DOWN = 'cap:confluenceSyncFailed';
+
+export async function syncSamplePages(client, agreements, { source = 'unknown', force = false } = {}) {
+  const out = { updated: [], inSync: [], errors: [], skipped: null };
+  const targets = agreements.filter((a) => a.sample && a.confluencePageId);
+  if (!targets.length) {
+    console.log(`Fides page sync (${source}): nothing to do, no sample agreement has a linked page`);
+    return out;
+  }
+  const down = force ? null : await store.get(CONFLUENCE_DOWN).catch(() => null);
+  if (down) {
+    out.skipped = `Confluence calls failed recently from this install (${down.message}); retrying after ${down.retryAfter}`;
+    console.log(`Fides page sync (${source}): skipped. ${out.skipped}`);
+    return out;
+  }
+  console.log(`Fides page sync (${source}): start, ${targets.length} sample page(s)`);
   await Promise.all(
-    agreements
-      .filter((a) => a.sample && a.confluencePageId)
-      .map(async (a) => {
-        try {
-          if ((await syncSamplePage(client, a)) === 'updated') out.updated.push(a.issueKey);
-        } catch (e) {
-          out.errors.push(`${a.issueKey}: ${e.message}`);
-        }
-      })
+    targets.map(async (a) => {
+      try {
+        const r = await syncSamplePage(client, a, { force });
+        if (r === 'updated') out.updated.push(a.issueKey);
+        else out.inSync.push(a.issueKey);
+        if (r === 'updated') console.log(`Fides page sync (${source}): updated page ${a.confluencePageId} for ${a.issueKey} in place`);
+      } catch (e) {
+        out.errors.push(`${a.issueKey}: ${e.message}`);
+        console.warn(`Fides page sync (${source}): failed for ${a.issueKey}, page ${a.confluencePageId}: ${e.status ? `HTTP ${e.status} ` : ''}${e.message}`);
+      }
+    })
   );
+  if (out.errors.length && !out.updated.length && !out.inSync.length) {
+    const retryAfter = new Date(Date.now() + 3600 * 1000).toISOString();
+    await store.kvsSetTtl(CONFLUENCE_DOWN, { message: out.errors[0].slice(0, 160), retryAfter }, 3600).catch(() => {});
+    console.warn(`Fides page sync (${source}): every page failed, so Confluence calls look unavailable from this install; will retry after ${retryAfter}`);
+  }
+  console.log(`Fides page sync (${source}): done, updated=${out.updated.length} inSync=${out.inSync.length} failed=${out.errors.length}`);
   return out;
 }
 
@@ -756,8 +795,9 @@ export async function syncSamplePages(client, agreements) {
 // sample page by the stored page record or by exact title in any space, and
 // create it only if Confluence answered that none exists. Never duplicates
 // pages; does nothing (no API calls) when every sample is already linked.
-export async function backfillSamplePages(client, { createMissing = true } = {}) {
-  const out = { linked: [], created: [], errors: [], forbidden: false, synced: [] };
+export async function backfillSamplePages(client, opts = {}) {
+  const { createMissing = true } = opts;
+  const out = { linked: [], created: [], errors: [], forbidden: false, synced: [], syncErrors: [], syncSkipped: null };
   const all = await loadAgreements(client);
   const todo = all.filter((a) => a.sample && a.sampleKey && a.issueKey && !a.confluencePageId);
   // Linked, but the shared issue property never learnt the page (written by
@@ -773,9 +813,10 @@ export async function backfillSamplePages(client, { createMissing = true } = {})
   }
   const sync = async () => {
     const list = out.linked.length ? await loadAgreements(client, { hydrate: false }).catch(() => all) : all;
-    const r = await syncSamplePages(client, list);
+    const r = await syncSamplePages(client, list, { source: opts.source || 'backfill', force: opts.force === true });
     out.synced = r.updated;
-    out.errors.push(...r.errors);
+    out.syncErrors = r.errors;
+    out.syncSkipped = r.skipped;
   };
   if (!todo.length) {
     await sync();
@@ -918,7 +959,7 @@ export async function judgeModeSeed(client, source, { force = false } = {}) {
     await Promise.all(seeded.map((a) => a.pending).filter(Boolean));
     const scan = await saveStamp(stamp);
     // Pages left by an earlier seed may carry older dates: match them to Jira.
-    await syncSamplePages(client, seeded).catch(() => {});
+    await syncSamplePages(client, seeded, { source: `seed (${source})` }).catch(() => {});
     // Nothing could be created because the user lacks permission: say so
     // instead of showing an empty board.
     if (!seeded.length && rejected.length && rejected.every((e) => e instanceof ApiError && e.permissionDenied)) {
@@ -1156,6 +1197,33 @@ async function adoptPage(client, agreement, page, url) {
   return linkAgreementPage(client, agreement, String(page.id), agreement.confluenceUrl || url);
 }
 
+// An already-tracked page. Read-only unless confirmed: then the page link is
+// written onto the issue and a lagging sample page is rewritten in place.
+async function settleExisting(client, hit, page, pageInfo, url, extracted, confirm) {
+  const a = hit.agreement;
+  const pageIsStale = Boolean(a.sample && String(page.id) === String(a.confluencePageId) && String(page.title || '').startsWith(SAMPLE_PAGE_PREFIX) && !pageMatchesRecord(page.storage, a));
+  const result = existingResult(hit, page, pageInfo, extracted);
+  result.pageStale = pageIsStale;
+  if (!confirm) {
+    if (pageIsStale) result.syncOffer = `This sample page still shows older dates than ${a.issueKey} in Jira. Ask the user whether to update the page to match Jira; if yes, call track-agreement-from-page with confirm true.`;
+    return result;
+  }
+  await adoptPage(client, a, page, url).catch((e) => console.warn(`Fides ${a.issueKey}: could not record the page link: ${e.message}`));
+  if (pageIsStale) {
+    try {
+      const r = await syncSamplePage(client, { ...a, confluencePageId: String(page.id) }, { force: true });
+      result.pageSynced = r;
+      if (r === 'updated') result.message += ' The page dates were updated to match Jira.';
+      console.log(`Fides page sync (rovo confirm): ${r} page ${page.id} for ${a.issueKey}`);
+    } catch (e) {
+      result.pageSynced = 'failed';
+      result.message += ' The page could not be updated (you may not have edit permission on it).';
+      console.warn(`Fides page sync (rovo confirm): failed for page ${page.id}: ${e.message}`);
+    }
+  }
+  return result;
+}
+
 function existingResult(m, page, pageInfo, extracted) {
   const a = m.agreement;
   const pageEnd = extracted?.endDate?.value || null;
@@ -1173,6 +1241,11 @@ function existingResult(m, page, pageInfo, extracted) {
 // sources, and create the agreement only when `confirm` is true. Dedupe is
 // Jira-backed (see agreementForPage), so it gives the same answer from the
 // Jira and the Confluence install.
+//
+// Writes happen only when `confirm` is true: with confirm false (the
+// read-only check, or an unconfirmed call) nothing is created, adopted or
+// rewritten. On confirm, an already-tracked sample page whose dates lag
+// Jira is also brought in step, in place.
 export async function trackAgreementFromPage(client, { pageRef, contextContentId = null, confirm = false, overrides = {} } = {}) {
   let page;
   try {
@@ -1197,10 +1270,7 @@ export async function trackAgreementFromPage(client, { pageRef, contextContentId
 
   let agreements = await loadAgreements(client);
   const hit = await agreementForPage(client, page, agreements, merged);
-  if (hit) {
-    await adoptPage(client, hit.agreement, page, url).catch(() => {});
-    return existingResult(hit, page, pageInfo, ex.fields);
-  }
+  if (hit) return settleExisting(client, hit, page, pageInfo, url, ex.fields, confirm);
 
   for (const k of ['vendor', 'endDate', 'noticeDays', 'owner']) {
     if (overrides[k] !== undefined && overrides[k] !== null && overrides[k] !== '') {
@@ -1233,10 +1303,7 @@ export async function trackAgreementFromPage(client, { pageRef, contextContentId
     // Re-check in Jira under the lock.
     agreements = await loadAgreements(client);
     const again = await agreementForPage(client, page, agreements, merged);
-    if (again) {
-      await adoptPage(client, again.agreement, page, url).catch(() => {});
-      return existingResult(again, page, pageInfo, ex.fields);
-    }
+    if (again) return settleExisting(client, again, page, pageInfo, url, ex.fields, true);
     const a = await createAgreement(client, {
       vendor: merged.vendor,
       endDate: merged.endDate,

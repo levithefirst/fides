@@ -28,6 +28,7 @@ const resolver = new Resolver();
 // First open of the board: seed judge-mode data if this is a fresh site,
 // then return the board. Never throws to the UI.
 resolver.define('bootstrap', async ({ context }) => {
+  console.log(`Fides board open: product=${installProduct({}, context)}`);
   const client = api.asUser();
   let seed = null;
   try {
@@ -37,7 +38,10 @@ resolver.define('bootstrap', async ({ context }) => {
   }
   // Link sample agreements to their Confluence pages if Confluence became
   // reachable after seeding. No API calls when everything is linked.
-  const backfill = await svc.backfillSamplePages(client).catch((e) => ({ errors: [friendly(e)] }));
+  const backfill = await svc.backfillSamplePages(client, { source: 'board-open (jira)' }).catch((e) => {
+    console.warn(`Fides board-open backfill failed: ${e.message}`);
+    return { errors: [friendly(e)] };
+  });
   const board = await safeBoard(client, context?.accountId);
   return { ...board, seedResult: seed, backfill: { linked: backfill.linked?.length || 0, errors: backfill.errors?.slice(0, 3) || [] } };
 });
@@ -66,9 +70,13 @@ resolver.define('getBoard', async ({ context }) => safeBoard(api.asUser(), conte
 // Cheap KVS read: the last board this user saw, painted before anything else.
 resolver.define('getSnapshot', async ({ context }) => svc.getSnapshot(context?.accountId));
 
-resolver.define('backfill', async () => {
-  const r = await svc.backfillSamplePages(api.asUser()).catch(() => ({ linked: [] }));
-  return { linked: r.linked?.length || 0 };
+resolver.define('backfill', async ({ context }) => {
+  console.log(`Fides board backfill: product=${installProduct({}, context)}`);
+  const r = await svc.backfillSamplePages(api.asUser(), { source: 'board (jira)' }).catch((e) => {
+    console.warn(`Fides board backfill failed: ${e.message}`);
+    return { linked: [], synced: [] };
+  });
+  return { linked: r.linked?.length || 0, synced: r.synced?.length || 0 };
 });
 
 resolver.define('logPaint', async ({ payload }) => svc.recordPaint(payload || {}));
@@ -246,8 +254,8 @@ export async function installed(event, context) {
       console.log(`Fides judge mode on install (${product}): ${r.state}${r.adopted ? `, reused ${r.adopted} existing sample agreement(s)` : ''}`);
       if (['needs-project', 'no-projects', 'no-permission', 'partial', 'error'].includes(r.state)) return retryLater(retryCount, `seed ${r.state}`);
     }
-    const bf = await svc.backfillSamplePages(client);
-    if (bf.linked.length) console.log(`Fides install: linked ${bf.linked.length} sample agreement(s) to Confluence pages`);
+    const bf = await svc.backfillSamplePages(client, { source: `install (${product})` });
+    console.log(`Fides install (${product}): backfill linked=${bf.linked.length} pagesSynced=${bf.synced.length}`);
     if (bf.forbidden) return retryLater(retryCount, 'Confluence permissions not ready');
   } catch (e) {
     if (e instanceof jira.ApiError && e.forbidden) return retryLater(retryCount, 'permission error');
@@ -264,14 +272,22 @@ export async function dailyScan(event, context) {
   // The trigger fires once per product install. The scan (reviews, pings,
   // escalations) runs in the Jira install only, so nothing is pinged twice;
   // the Confluence install only keeps sample pages and links in step.
-  if (installProduct(event, context) === 'confluence') {
-    const bf = await svc.backfillSamplePages(api.asApp()).catch((e) => ({ errors: [e.message], linked: [], synced: [] }));
+  const product = installProduct(event, context);
+  console.log(`Fides daily trigger: product=${product}`);
+  if (product === 'confluence') {
+    const bf = await svc.backfillSamplePages(api.asApp(), { source: 'daily (confluence)' }).catch((e) => {
+      console.warn(`Fides daily (confluence) failed: ${e.message}`);
+      return { linked: [], synced: [] };
+    });
     console.log(`Fides daily (confluence): linked=${bf.linked?.length || 0} pagesSynced=${bf.synced?.length || 0}`);
     return;
   }
   try {
     const stamp = await svc.runScan(api.asApp(), 'scheduledTrigger');
     console.log(`Fides scan ok=${stamp.ok} reviews=${stamp.reviewsCreated} escalations=${stamp.escalationsCreated}`);
+    // The product could not be identified (or this is the Jira install):
+    // also try the page sync once, so the logs show what this install can do.
+    if (product === 'unknown') await svc.backfillSamplePages(api.asApp(), { source: 'daily (product unknown)' }).catch(() => {});
   } catch (e) {
     console.error(`Fides scan failed: ${e.message}`);
   }
@@ -420,8 +436,26 @@ export async function escalateThreatenedMilestones(payload) {
   }
 }
 
-// Rovo action: track-agreement-from-page. Proposal first; creates only when
-// the user has confirmed (confirm: true). Idempotent per Confluence page.
+// Rovo action: check-agreement-from-page (GET). Read-only: is this page
+// already tracked, or what would be proposed? Writes nothing, so Rovo runs
+// it without a confirmation card.
+export async function checkAgreementFromPageAction(payload) {
+  try {
+    console.log('Fides check-agreement-from-page');
+    const r = await svc.trackAgreementFromPage(api.asUser(), {
+      pageRef: payload?.page,
+      contextContentId: payload?.context?.confluence?.contentId || null,
+      confirm: false,
+    });
+    return { ...r, readOnly: true, disclaimer: DISCLAIMER };
+  } catch (e) {
+    return { status: 'error', error: friendly(e), disclaimer: DISCLAIMER };
+  }
+}
+
+// Rovo action: track-agreement-from-page (CREATE). Writes only when the
+// user has confirmed (confirm: true); with confirm false it is read-only.
+// Idempotent per Confluence page.
 export async function trackAgreementFromPageAction(payload) {
   try {
     const client = api.asUser();

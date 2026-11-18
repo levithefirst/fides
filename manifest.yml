@@ -48,6 +48,7 @@ modules:
         - create-review-issue
         - escalate-threatened-milestones
         - draft-brief
+        - check-agreement-from-page
         - track-agreement-from-page
 
   action:
@@ -108,12 +109,25 @@ modules:
           required: false
           description: Set to false to skip reading the linked Confluence page. Defaults to true.
 
+    - key: check-agreement-from-page
+      name: Check contract page
+      function: action-check
+      actionVerb: GET
+      description: |
+        Read-only. Read a Confluence contract page as the user and say whether it is already tracked in Jira (existing agreement key) or propose a new agreement with quoted sources. Creates nothing. Use first for "track this contract".
+      inputs:
+        page:
+          title: Confluence page
+          type: string
+          required: true
+          description: The Confluence page URL, page id or exact page title. Use "this page" when Rovo is open on the contract page.
+
     - key: track-agreement-from-page
       name: Track agreement from page
       function: action-track
       actionVerb: CREATE
       description: |
-        Read a Confluence contract page as the user and propose an agreement with quoted sources. Call with confirm false first; create only after the user confirms (confirm true). A page already tracked returns its agreement.
+        Write step. Call only after the user confirmed a proposal from check-agreement-from-page (confirm true). Creates the agreement once per page, or on an already tracked sample page updates its dates to match Jira.
       inputs:
         page:
           title: Confluence page
@@ -162,6 +176,8 @@ modules:
       handler: index.escalateThreatenedMilestones
     - key: action-brief
       handler: index.draftBriefAction
+    - key: action-check
+      handler: index.checkAgreementFromPageAction
     - key: action-track
       handler: index.trackAgreementFromPageAction
 
