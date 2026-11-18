@@ -38,7 +38,7 @@ Target length: about 4:15. Use a fresh demo site from `forge site provision` wit
 
 ## 4:00 to 4:15. Close
 
-17. "Forge, Jira, Confluence and a Rovo agent with four actions, in the tools your team already uses. Fides: escalate before the notice window closes."
+17. "Forge, Jira, Confluence and a Rovo agent with actions, in the tools your team already uses. Fides: escalate before the notice window closes."
 
 ## Checklist before upload
 

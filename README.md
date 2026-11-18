@@ -35,7 +35,7 @@ Ask Fides **"Is Helios at risk, and what should I do?"** (a conversation starter
 4. `draft-brief` for Helios: reads the Confluence contract page as the user.
 5. Answers with the risk, why a date reminder is not enough, the escalation key, hedged renew / cancel / renegotiate options, what a missed notice could mean, and the not-legal-advice line.
 
-The board's **Ask Fides in Rovo** panel, directly under the Due spotlight, opens Rovo Chat with that question plus one ready prompt per action.
+The board's **Ask Fides in Rovo** panel, directly under the Due spotlight, opens Rovo Chat with that question plus ready prompts for the everyday actions (list, review, escalate, brief); track-from-page is asked for in Rovo itself.
 
 | Action key | Verb | What it does |
 | --- | --- | --- |

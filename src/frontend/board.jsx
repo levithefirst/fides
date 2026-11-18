@@ -32,7 +32,7 @@ import { deriveBoardView, ROVO_NOTE } from '../lib/view.js';
 
 const AGENT = { type: 'forge', agentKey: 'fides-agent', agentName: 'Fides' };
 
-// The four Rovo actions, one button each, after the chained ask.
+// One button per common Rovo action, after the chained ask.
 const AGENT_ACTIONS = [
   { label: 'List upcoming notices', prompt: 'List the agreements with notices due in the next 60 days.' },
   { label: 'Create a review issue', prompt: 'Create a review issue for the most urgent Due agreement.' },
@@ -397,7 +397,7 @@ function AskFides({ rovoEnabled, rovoNote, spotlight }) {
       <Stack space="space.100">
         <Inline space="space.100" alignBlock="center" shouldWrap>
           <Heading size="small">Ask Fides in Rovo</Heading>
-          <Text size="small" color="color.text.subtle">Four actions, run as you, with your permissions.</Text>
+          <Text size="small" color="color.text.subtle">Fides acts as you, with your permissions.</Text>
         </Inline>
         <Inline space="space.100" shouldWrap>
           <Button appearance="primary" onClick={() => open(chained)} isDisabled={disabled}>
