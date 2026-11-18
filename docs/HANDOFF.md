@@ -12,6 +12,7 @@ Everything that cannot be done from a code session, written for Grok Bot and Flu
   2. Install-time seeding is best effort with retry and back-off; the official 10 s check is now "open the board after install". See step 8.
   3. The umber accent bar above the board heading now renders (see `docs/COLOR-THEME.md`).
 - Code sessions do not run `forge login`, `register`, `deploy` or `install`; Fluid deploys.
+- **Rovo from Confluence (fixed after a live test on 2.1.0, 566a9fc):** in Confluence Rovo on the Helios sample page, "List upcoming notices" found nothing and "Track this contract" proposed a new Helios record instead of CLSD-35. Cause: app storage is per product install, and since only the Jira install seeds, the Confluence install's storage was empty; every Rovo read used storage only. Now Jira is the source of truth for reads: agreements come from JQL (`labels = fides-agreement`) plus the `fides-agreement` issue property (or the description), escalations from the `fides-esc-<agreement>-<blocker>` labels, reviews from label plus link; each install's storage is hydrated from Jira and an empty store never means "no agreements". Track-from-page dedupes in Jira (page link first, then vendor plus end date) and writes the page id onto the issue property. Sample pages whose dates lag Jira are rewritten in place (same page id). The daily scan runs its reviews and escalations in the Jira install only. Two "Fides" entries in the agent picker are expected and agree. Plain `forge deploy`; no scope change. Verify with step 8I.
 - **Sample seeding idempotency (fixed after a live cold-install test):** uninstall/reinstall on one-atlas-wptq created two extra sample sets (CLSD-21..27 at +47 s, CLSD-28..34 at +104 s), one per product install, because each install has its own app storage and the old code only reused a sample issue when its storage record existed. Now Jira is the source of truth: existing `fides-sample-<key>` issues are reused and the record rebuilt from the issue; blockers and reviews are found by label plus link; only the Jira install seeds (the Confluence install only links pages); a 60 s lock plus re-checks guards concurrent runs. **Samples are created once per site even if both products are installed.** Plain `forge deploy`; no scope change. Clean up the extra sets with step 8H.
 
 ## Steps
@@ -170,6 +171,17 @@ Deploy note: **no scope change** in this batch, so `forge deploy` is enough; exi
    - install (or connect) Confluence; the logs show no seeding for it, only page linking;
    - uninstall and reinstall Jira; the logs say "reused 4 existing sample agreement(s)";
    - JQL `labels = fides-sample AND labels = fides-agreement` returns exactly 4 issues, `labels = fides-escalation` exactly 1, `labels = fides-review AND labels = fides-sample` exactly 1.
+
+### 8I. Rovo from both picker entries (Jira and Confluence) agree
+
+Read-only checks except step 4 (the first board open after deploy updates the stale sample pages in place; it creates nothing).
+
+1. In Jira, open Rovo, pick **Fides** (the Jira entry). Ask "What notices are due in the next 60 days?". Note the answer: Helios Payroll (CLSD-35) Due first, notice-by 24 Nov, with its escalation key.
+2. In Confluence, open the Helios sample page in space EO, open Rovo, pick **Fides** (the Confluence entry; the picker shows two). Ask the same question. The list, keys, statuses, notice-by dates and escalation key must match step 1.
+3. On the same page ask "Track this contract from its Confluence page". The answer must say it is **already tracked as CLSD-35** and must not propose a new record. If it mentions that the page shows a different end date, that is the stale page (see step 4). Say "yes, track it" to be sure: still "already tracked", and JQL `labels = fides-agreement AND labels = fides-sample` still returns exactly 4.
+4. Open the Fides board in Jira once (the background sync runs), then reload the Helios page in Confluence. The page history shows a new version by Fides, and its end date now matches CLSD-35 (2026-12-24); the page id in the URL is unchanged. The same applies to the Northwind, Larkspur and Quay pages. Confluence search for "Fides sample contract" still finds exactly 4 pages.
+5. From each picker entry ask "Is Helios at risk, and what should I do?". Both name the same escalation issue, report it as already existing (no new `fides-escalation` issue in JQL), and end with the not-legal-advice line.
+6. Optional: CLSD-35's `fides-agreement` issue property now has `confluencePageId` and `confluenceUrl` set (visible with the Jira REST API: `GET /rest/api/3/issue/CLSD-35/properties/fides-agreement`).
 
 ### 9. Pre-flight the full acceptance list on the demo site
 
