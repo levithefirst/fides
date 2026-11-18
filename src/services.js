@@ -735,6 +735,15 @@ async function computeBoard(client, { asUser }) {
   }
   const base = cfg?.baseUrl || (await siteBase(client).catch(() => ''));
   const visibleIds = new Set(agreements.map((a) => String(a.issueId)));
+  // What this user can do in the Fides project, so the board can go
+  // read-only instead of failing on a create. Unknown (null) on error.
+  const permissionsP =
+    asUser && cfg?.projectKey
+      ? await jira
+          .myPermissions(client, cfg.projectKey, ['CREATE_ISSUES', 'BROWSE_PROJECTS', 'ADMINISTER'])
+          .then((p) => ({ projectKey: cfg.projectKey, canCreate: p.CREATE_ISSUES, canBrowse: p.BROWSE_PROJECTS, isAdmin: p.ADMINISTER }))
+          .catch(() => null)
+      : Promise.resolve(null);
   // Due agreements carry their live open blockers and linked escalations, so
   // the first screen shows why a plain date reminder is not enough.
   await Promise.all(
@@ -755,11 +764,13 @@ async function computeBoard(client, { asUser }) {
         }
       })
   );
+  const permissions = await permissionsP;
   return {
     today,
     baseUrl: base,
     config: cfg || null,
     seed: seed || null,
+    permissions,
     lastRun: lastRun || null,
     agreements,
     escalations: escalations

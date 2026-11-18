@@ -48,7 +48,7 @@ test('no Rovo: board and escalation still render, with a note', () => {
   assert.equal(v.mode, 'ready');
   assert.equal(v.rovoEnabled, false);
   assert.equal(v.rovoNote, ROVO_NOTE);
-  assert.match(ROVO_NOTE, /Rovo Chat is needed/);
+  assert.match(ROVO_NOTE, /^Rovo Chat is not available on this site\. Next step: /);
   assert.equal(v.spotlight.escalation.issueKey, 'CLSD-12');
   assert.equal(deriveBoardView(board(), { rovo: true }).rovoNote, null);
 });
@@ -68,7 +68,7 @@ test('user cannot create issues: clear permission message, never blank', () => {
 });
 
 test('board load failure shows the error, not a blank board', () => {
-  const v = deriveBoardView({ loadError: 'You do not have permission to read the Fides agreement issues in Jira.', agreements: [] });
+  const v = deriveBoardView({ loadError: 'You do not have permission to read the Fides agreement issues in Jira.', loadErrorKind: 'permission', agreements: [] });
   assert.equal(v.mode, 'error');
   assert.match(v.banner.text, /permission/);
 });

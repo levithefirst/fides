@@ -72,6 +72,7 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
     userSearch: false,
     unassignable: new Set(),
     defaultAssignee: null,
+    isAdmin: true,
   };
 
   const json = (status, body) => ({
@@ -151,6 +152,11 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
         if (!state.users.some((u) => u.accountId === body)) return json(404, { errorMessages: ['User not found'] });
         issues.get(m[1]).watchers.push(body);
         return json(204);
+      }
+      if (p.startsWith('/rest/api/3/mypermissions')) {
+        const can = { CREATE_ISSUES: state.canCreate && !state.createmetaEmpty, BROWSE_PROJECTS: state.canBrowse, ADMINISTER: state.isAdmin };
+        const keys = decodeURIComponent(/permissions=([^&]+)/.exec(p)[1]).split(',');
+        return json(200, { permissions: Object.fromEntries(keys.map((k) => [k, { key: k, havePermission: !!can[k] }])) });
       }
       if (p.startsWith('/rest/api/3/user/search')) {
         if (!state.userSearch) return json(403, { message: 'Unauthorized; scope does not match' });

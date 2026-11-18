@@ -49,7 +49,9 @@ export async function safeBoard(client, accountId = null) {
   } catch (e) {
     const perm = e instanceof jira.ApiError && e.permissionDenied;
     return {
-      loadError: perm ? 'You do not have permission to read the Fides agreement issues in Jira. Ask a Jira admin for Browse projects permission.' : `Fides could not load the board: ${friendly(e)}`,
+      loadError: perm ? 'You do not have permission to read the Fides agreement issues in Jira.' : 'Fides could not load the board.',
+      loadErrorKind: perm ? 'permission' : 'error',
+      loadErrorDetail: perm ? null : friendly(e),
       agreements: [],
       escalations: [],
       counts: { due: 0, upcoming: 0, onTrack: 0 },

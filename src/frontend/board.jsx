@@ -28,7 +28,7 @@ import ForgeReconciler, {
 } from '@forge/react';
 import { invoke, rovo } from '@forge/bridge';
 import { StatusChip, UmberRule, Footer, card } from './components';
-import { deriveBoardView } from '../lib/view.js';
+import { deriveBoardView, ROVO_NOTE } from '../lib/view.js';
 
 const AGENT = { type: 'forge', agentKey: 'fides-agent', agentName: 'Fides' };
 
@@ -411,7 +411,7 @@ function AskFides({ rovoEnabled, rovoNote, spotlight }) {
         </Inline>
         {rovoNote || failed ? (
           <Text size="small" color="color.text.subtle">
-            {rovoNote || 'Rovo Chat is needed for the Fides agent. The board, review issues and escalations work without it.'}
+            {rovoNote || ROVO_NOTE}
           </Text>
         ) : null}
       </Stack>
@@ -600,9 +600,9 @@ function Board() {
             </Text>
           </Stack>
           <ButtonGroup>
-            <Button onClick={() => setModal({ kind: 'add' })}>Add agreement</Button>
-            <Button onClick={() => setModal({ kind: 'import' })}>Import agreements</Button>
-            <Button onClick={runScan} isDisabled={busy || seeding}>Run scan now</Button>
+            <Button onClick={() => setModal({ kind: 'add' })} isDisabled={!view.canCreate}>Add agreement</Button>
+            <Button onClick={() => setModal({ kind: 'import' })} isDisabled={!view.canCreate}>Import agreements</Button>
+            <Button onClick={runScan} isDisabled={busy || seeding || !view.canCreate}>Run scan now</Button>
           </ButtonGroup>
         </Inline>
         <Text size="small" color={data.lastRun && !data.lastRun.ok ? 'color.text.danger' : 'color.text.subtle'}>
@@ -614,12 +614,15 @@ function Board() {
         </Text>
       </Stack>
 
-      {view.banner ? (
+      {view.banner && view.mode !== 'empty' ? (
         <SectionMessage appearance={view.banner.appearance} title={view.banner.title}>
-          <Inline space="space.100" alignBlock="center">
-            {view.banner.spinner ? <Spinner size="small" label="Seeding" /> : null}
-            <Text>{view.banner.text}</Text>
-          </Inline>
+          <Stack space="space.050">
+            <Inline space="space.100" alignBlock="center">
+              {view.banner.spinner ? <Spinner size="small" label="Seeding" /> : null}
+              <Text>{view.banner.text}</Text>
+            </Inline>
+            {view.banner.detail ? <Text size="small" color="color.text.subtle">{view.banner.detail}</Text> : null}
+          </Stack>
         </SectionMessage>
       ) : null}
 
@@ -648,7 +651,7 @@ function Board() {
                   items={g.items}
                   base={data.baseUrl}
                   escalatedIds={escalatedIds}
-                  busy={busy}
+                  busy={busy || !view.canCreate}
                   onReview={review}
                   onLinkPage={(a) => setModal({ kind: 'link', agreement: a })}
                 />
@@ -664,9 +667,9 @@ function Board() {
         </Stack>
       ) : view.showEmpty ? (
         <EmptyState
-          header="No agreements yet"
-          description="Load sample agreements to see Due, Upcoming and On track notices, or add your first agreement."
-          primaryAction={<Button appearance="primary" onClick={loadSamples} isDisabled={busy}>Load samples</Button>}
+          header={view.banner?.sentence || 'No agreements are tracked yet.'}
+          description={`Next step: ${view.banner?.nextStep || 'Load the samples, import rows from a spreadsheet, or add your first agreement.'}`}
+          primaryAction={<Button appearance="primary" onClick={loadSamples} isDisabled={busy || !view.canCreate}>Load samples</Button>}
         />
       ) : null}
 

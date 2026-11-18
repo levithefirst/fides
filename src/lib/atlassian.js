@@ -118,6 +118,14 @@ export async function createIssue(client, { projectId, issueTypeId, summary, des
   }
 }
 
+// What the caller may do (read:jira-work). Returns { KEY: boolean }.
+export async function myPermissions(client, projectKey, keys) {
+  const res = await call(client, 'jira', route`/rest/api/3/mypermissions?projectKey=${projectKey}&permissions=${keys.join(',')}`);
+  const out = {};
+  for (const k of keys) out[k] = res?.permissions?.[k]?.havePermission === true;
+  return out;
+}
+
 export async function addWatcher(client, issueKey, accountId) {
   // The body is the account id as a JSON string.
   await call(client, 'jira', route`/rest/api/3/issue/${issueKey}/watchers`, { method: 'POST', body: String(accountId) });

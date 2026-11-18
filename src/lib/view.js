@@ -5,10 +5,13 @@
 import { shortDate } from './dates.js';
 
 export const WHY_LINE = "A date reminder can't see that this blocker is still open.";
+// Every non-ready state is one plain sentence plus one next step.
+export const state = (appearance, sentence, nextStep, extra = {}) => ({ appearance, title: sentence, sentence, nextStep, text: `Next step: ${nextStep}`, ...extra });
+
 export const ROVO_NOTE =
-  'Rovo Chat is needed for the Fides agent. The board, review issues and escalations work without it.';
+  'Rovo Chat is not available on this site. Next step: ask a site admin to turn on Rovo; the board, scan and escalations keep working without it.';
 export const CONFLUENCE_NOTE =
-  'No Confluence contract pages are linked yet. Use "Link a page" on an agreement, or connect Fides to Confluence.';
+  'Fides cannot read Confluence contract pages here yet. Next step: connect Fides to Confluence, or use "Link a page" on an agreement.';
 
 const SAMPLE_TOTAL = 4;
 
@@ -26,16 +29,20 @@ export function freshnessText(savedAt, now = Date.now()) {
 // rovo:      true | false | null (null = not known yet)
 export function deriveBoardView(data, { seeding = false, rovo = null, now = Date.now() } = {}) {
   if (!data) {
-    return { mode: 'loading', banner: { appearance: 'information', title: 'Loading the notice board', text: 'Reading agreements from Jira.' } };
+    return { mode: 'loading', canCreate: true, banner: state('information', 'Loading the notice board.', 'Wait a moment; agreements are being read from Jira.') };
   }
   const agreements = data.agreements || [];
   const seedState = data.seed?.state;
+  const perms = data.permissions || null; // { canCreate, isAdmin, projectKey } or null when unknown
+  const project = perms?.projectKey || data.config?.projectKey || 'the Fides project';
   const view = {
     freshness: data.fromSnapshot ? freshnessText(data.savedAt, now) : null,
     mode: 'ready',
     banner: null,
     showPicker: false,
     showEmpty: false,
+    canCreate: perms?.canCreate !== false,
+    isAdmin: perms?.isAdmin === true,
     spotlight: spotlightFor(agreements, data.escalations || []),
     rovoNote: rovo === false ? ROVO_NOTE : null,
     rovoEnabled: rovo !== false,
@@ -43,7 +50,11 @@ export function deriveBoardView(data, { seeding = false, rovo = null, now = Date
   };
 
   if (data.loadError) {
-    return { ...view, mode: 'error', banner: { appearance: 'error', title: 'The board could not load', text: data.loadError } };
+    const next =
+      data.loadErrorKind === 'permission'
+        ? 'Ask a Jira admin for Browse projects permission on the Fides project, then reload.'
+        : 'Reload the page to retry.';
+    return { ...view, mode: 'error', canCreate: false, banner: state('error', data.loadError, next, { detail: data.loadErrorDetail || null }) };
   }
 
   const inProgress = seeding || seedState === 'running';
@@ -52,8 +63,11 @@ export function deriveBoardView(data, { seeding = false, rovo = null, now = Date
     const esc = (data.escalations || []).length;
     view.mode = 'seeding';
     view.banner = {
-      appearance: 'information',
-      title: 'Seeding sample agreements...',
+      ...state(
+        'information',
+        'Seeding sample agreements...',
+        'Wait a few seconds; rows appear as soon as they exist.'
+      ),
       text: `${Math.min(n, SAMPLE_TOTAL)} of ${SAMPLE_TOTAL} sample agreements created${esc ? ', escalation created' : n ? ', escalation pending' : ''}. Rows appear as soon as they exist.`,
       spinner: true,
     };
@@ -66,13 +80,8 @@ export function deriveBoardView(data, { seeding = false, rovo = null, now = Date
         return {
           ...view,
           mode: 'no-permission',
-          banner: {
-            appearance: 'error',
-            title: 'Fides cannot create issues for you',
-            text:
-              data.seed.message ||
-              'You do not have permission to create issues in a Jira project on this site. Ask a Jira admin for the Create issues permission in one project, then reload this page.',
-          },
+          canCreate: false,
+          banner: state('error', 'Fides cannot create issues for you on this site.', 'Ask a Jira admin for the Create issues permission in one project, then reload this page.', { title: 'Fides cannot create issues for you', detail: data.seed.message || null }),
         };
       }
       break;
@@ -81,17 +90,18 @@ export function deriveBoardView(data, { seeding = false, rovo = null, now = Date
         return {
           ...view,
           mode: 'no-projects',
-          banner: {
-            appearance: 'warning',
-            title: 'No Jira project available',
-            text: 'There is no Jira project you can use on this site yet. Create a project (any template), then reload this page.',
-          },
+          banner: state('warning', 'There is no Jira project you can use on this site yet.', 'Create a project (any template), then reload this page.'),
         };
       }
       break;
     case 'needs-project':
       // Only here: projects exist but none could be picked automatically.
-      if (!agreements.length) return { ...view, mode: 'needs-project', showPicker: true };
+      if (!agreements.length) {
+        if (perms && !perms.isAdmin) {
+          return { ...view, mode: 'needs-project', banner: state('information', 'Fides needs a Jira project to keep agreements in.', 'Ask a Jira admin to open Apps > Fides and pick the project.') };
+        }
+        return { ...view, mode: 'needs-project', showPicker: true, banner: state('information', 'Fides needs a Jira project to keep agreements in.', 'Pick the project below.') };
+      }
       break;
     case 'error':
     case 'partial':
@@ -99,18 +109,28 @@ export function deriveBoardView(data, { seeding = false, rovo = null, now = Date
         return {
           ...view,
           mode: 'error',
-          banner: { appearance: 'error', title: 'Sample agreements could not be created', text: (data.seed.errors || [])[0] || 'Reload the page to retry.' },
           showEmpty: true,
+          banner: state('error', 'Sample agreements could not be created.', 'Reload the page to retry, or add an agreement yourself.', { detail: (data.seed.errors || [])[0] || null }),
         };
       }
-      view.banner = { appearance: 'warning', title: 'Some sample data could not be created', text: (data.seed.errors || [])[0] || 'Reload the page to retry.' };
+      view.banner = state('warning', 'Some sample data could not be created.', 'Reload the page to retry.', { detail: (data.seed.errors || [])[0] || null });
       break;
     default:
       break;
   }
+
+  // Signed in without Create issues in the chosen project: read-only board.
+  if (perms && perms.canCreate === false) {
+    view.canCreate = false;
+    view.mode = agreements.length ? 'read-only' : 'no-permission';
+    view.banner = state('warning', `You can view agreements but cannot create issues in ${project}.`, `Ask a Jira admin for the Create issues permission in ${project}.`);
+    return view;
+  }
+
   if (!agreements.length) {
     view.mode = 'empty';
     view.showEmpty = true;
+    view.banner = state('information', 'No agreements are tracked yet.', 'Load the samples, import rows from a spreadsheet, or add your first agreement.');
   }
   return view;
 }
