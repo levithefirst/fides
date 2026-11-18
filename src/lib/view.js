@@ -57,6 +57,17 @@ export function deriveBoardView(data, { seeding = false, rovo = null, now = Date
     return { ...view, mode: 'error', canCreate: false, banner: state('error', data.loadError, next, { detail: data.loadErrorDetail || null }) };
   }
 
+  // JQL silently returns nothing for a user without Browse projects: say
+  // so instead of showing "No agreements are tracked yet".
+  if (perms && perms.canBrowse === false) {
+    return {
+      ...view,
+      mode: 'error',
+      canCreate: false,
+      banner: state('error', 'You do not have permission to read the Fides agreement issues in Jira.', `Ask a Jira admin for Browse projects permission on ${project}, then reload.`),
+    };
+  }
+
   const inProgress = seeding || seedState === 'running';
   if (inProgress) {
     const n = agreements.filter((a) => a.sample).length;

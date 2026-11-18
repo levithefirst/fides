@@ -63,13 +63,20 @@ test('board resolver never throws: a browse permission failure becomes a message
   await installed({});
   site.state.canBrowse = false;
   const b = await safeBoard(site.client);
-  assert.equal(b.loadError, 'You do not have permission to read the Fides agreement issues in Jira.');
-  assert.equal(b.loadErrorKind, 'permission');
-  assert.deepEqual(b.agreements, []);
+  assert.deepEqual(b.agreements, [], 'JQL returns nothing for this user');
+  assert.equal(b.permissions.canBrowse, false);
   const { deriveBoardView } = await import('../src/lib/view.js');
   const v = deriveBoardView(b);
-  assert.equal(v.mode, 'error');
+  assert.equal(v.mode, 'error', 'not a misleading empty board');
+  assert.equal(v.banner.sentence, 'You do not have permission to read the Fides agreement issues in Jira.');
   assert.match(v.banner.text, /^Next step: Ask a Jira admin for Browse projects/);
+  // A genuine failure still becomes a message, never a throw.
+  site.state.canBrowse = true;
+  const orig = site.client.requestJira;
+  site.client.requestJira = async () => ({ status: 500, ok: false, statusText: '500', text: async () => '{"errorMessages":["boom"]}' });
+  const err = await safeBoard(site.client);
+  site.client.requestJira = orig;
+  assert.equal(err.loadError, 'Fides could not load the board.');
 });
 
 // ---------- gap 1: the chained Rovo ask, run through the real action handlers ----------

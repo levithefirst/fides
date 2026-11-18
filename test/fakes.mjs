@@ -58,6 +58,7 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
   let nextPage = 900001;
   const base = 'https://example-site.atlassian.net';
   // Toggles for clean-site permission states.
+  const pageUpdates = [];
   const state = {
     confluence,
     canCreate: true,
@@ -123,6 +124,8 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
         return json(201, { id, key });
       }
       if (p === '/rest/api/3/search/jql') {
+        // Real JQL returns nothing (not an error) for issues you cannot browse.
+        if (!state.canBrowse) return json(200, { issues: [], isLast: true });
         const jql = body.jql.replace(/\s+ORDER BY\s+created\s+ASC\s*$/i, '');
         const found = [...issues.values()]
           .filter((i) => matchesJql(i, jql))
@@ -149,6 +152,9 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
         a.links.push(b.key);
         b.links.push(a.key);
         return json(201);
+      }
+      if ((m = /^\/rest\/api\/3\/issue\/([^/?]+)\/remotelink$/.exec(p)) && method === 'GET') {
+        return json(200, (issues.get(m[1])?.remote || []).map((r) => ({ globalId: r.globalId, object: { url: r.url, title: r.title } })));
       }
       if ((m = /^\/rest\/api\/3\/issue\/([^/?]+)\/remotelink$/.exec(p))) {
         // Jira upserts when the globalId already exists on the issue.
@@ -210,9 +216,18 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
         pages.set(id, { id, title: body.title, storage: body.body.value, spaceId: body.spaceId, spaceKey: 'LEGAL' });
         return json(200, { id, _links: { webui: `/spaces/LEGAL/pages/${id}`, base: `${base}/wiki` } });
       }
+      if ((m = /^\/wiki\/api\/v2\/pages\/(\d+)$/.exec(p)) && method === 'PUT') {
+        const pg = pages.get(m[1]);
+        if (!pg) return json(404, {});
+        const current = pg.version || 1;
+        if (body.version?.number !== current + 1) return json(409, { message: 'Version must be incremented' });
+        Object.assign(pg, { storage: body.body.value, title: body.title, version: current + 1 });
+        pageUpdates.push(m[1]);
+        return json(200, { id: pg.id, version: { number: pg.version } });
+      }
       if ((m = /^\/wiki\/api\/v2\/pages\/(\d+)\?/.exec(p))) {
         const pg = pages.get(m[1]);
-        return pg ? json(200, { id: pg.id, title: pg.title, body: { storage: { value: pg.storage } }, _links: { webui: `/spaces/${pg.spaceKey || "LEGAL"}/pages/${pg.id}`, base: `${base}/wiki` } }) : json(404, {});
+        return pg ? json(200, { id: pg.id, title: pg.title, version: { number: pg.version || 1 }, body: { storage: { value: pg.storage } }, _links: { webui: `/spaces/${pg.spaceKey || "LEGAL"}/pages/${pg.id}`, base: `${base}/wiki` } }) : json(404, {});
       }
     }
     throw new Error(`fake site: unhandled ${product} ${method} ${p}`);
@@ -230,5 +245,7 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
     requestJira: (path, opts) => handle('jira', path, opts),
     requestConfluence: (path, opts) => handle('confluence', path, opts),
   };
-  return { client, issues, pages, calls, base, state, addPage };
+  // Remote links, as Jira returns them.
+  const remoteLinksOf = (key) => (issues.get(key)?.remote || []).map((r) => ({ globalId: r.globalId, object: { url: r.url, title: r.title } }));
+  return { client, issues, pages, pageUpdates, calls, base, state, addPage, remoteLinksOf };
 }

@@ -166,12 +166,13 @@ test('backfill: agreements seeded before Confluence get linked once pages appear
   const esc = withLabel(site, LABELS.ESCALATION)[0];
   assert.equal(esc.remote.length, 1);
 
-  // Rerun: no API calls at all, nothing changes.
+  // Rerun: reads Jira (the source of truth) but writes nothing.
   const snapshot = JSON.stringify([...site.issues.values()].map((i) => i.remote));
   const callsBefore = site.calls.length;
   const again = await svc.backfillSamplePages(site.client);
   assert.equal(again.linked.length, 0);
-  assert.equal(site.calls.length, callsBefore, 'rerun makes no REST calls');
+  const writes = site.calls.slice(callsBefore).filter((c) => /^(POST|PUT|DELETE) /.test(c) && !c.startsWith('POST /rest/api/3/search/jql') && !c.startsWith('POST /rest/api/3/issue/bulkfetch'));
+  assert.deepEqual(writes, [], 'rerun makes no writes');
   assert.equal(JSON.stringify([...site.issues.values()].map((i) => i.remote)), snapshot);
   assert.equal(site.pages.size, pagesBefore);
 
@@ -185,9 +186,13 @@ test('backfill: a lost page id is re-linked without duplicating the page or the 
   await svc.judgeModeSeed(site.client, 'install');
   const helios = (await store.listAgreements()).find((a) => a.vendor === 'Helios Payroll');
   const pagesBefore = site.pages.size;
-  // Simulate KVS losing the link data for one agreement.
+  // Simulate the link data lost everywhere: this install's storage and the
+  // shared issue property (the remote link on the issue stays).
   await store.saveAgreement({ ...helios, confluencePageId: null, confluenceUrl: null });
   await store.del(store.keys.samplePage(helios.sampleKey));
+  const hIssue = site.issues.get(helios.issueKey);
+  hIssue.properties['fides-agreement'] = { ...hIssue.properties['fides-agreement'], confluencePageId: null, confluenceUrl: null };
+  hIssue.description = null;
   const r = await svc.backfillSamplePages(site.client);
   assert.equal(r.linked.length, 1);
   assert.equal(r.created.length, 0);

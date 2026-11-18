@@ -113,7 +113,7 @@ resolver.define('createAgreement', async ({ payload }) => {
 
 resolver.define('previewImport', async ({ payload }) => {
   try {
-    return await svc.previewImport(payload?.text || '');
+    return await svc.previewImport(api.asUser(), payload?.text || '');
   } catch (e) {
     return { ok: false, error: friendly(e), rows: [] };
   }
@@ -258,9 +258,17 @@ export async function installed(event, context) {
 
 // ---------- scheduledTrigger (interval: day) ----------
 
-export async function dailyScan() {
+export async function dailyScan(event, context) {
   // Scheduled triggers have no user: api.asApp(). Errors are caught and
   // stamped in KVS (lastRun), never thrown, because Forge does not retry.
+  // The trigger fires once per product install. The scan (reviews, pings,
+  // escalations) runs in the Jira install only, so nothing is pinged twice;
+  // the Confluence install only keeps sample pages and links in step.
+  if (installProduct(event, context) === 'confluence') {
+    const bf = await svc.backfillSamplePages(api.asApp()).catch((e) => ({ errors: [e.message], linked: [], synced: [] }));
+    console.log(`Fides daily (confluence): linked=${bf.linked?.length || 0} pagesSynced=${bf.synced?.length || 0}`);
+    return;
+  }
   try {
     const stamp = await svc.runScan(api.asApp(), 'scheduledTrigger');
     console.log(`Fides scan ok=${stamp.ok} reviews=${stamp.reviewsCreated} escalations=${stamp.escalationsCreated}`);
@@ -307,14 +315,13 @@ export async function listUpcomingNotices(payload) {
     const client = api.asUser();
     const days = Number.isFinite(Number(payload?.days)) && Number(payload.days) > 0 ? Number(payload.days) : DEFAULT_LOOKAHEAD_DAYS;
     const today = todayIso();
-    const agreements = await svc.visibleAgreements(client, { asUser: true });
-    const escKeys = await store.listEscalationKeys();
+    // Jira-backed: the same answer from the Jira and the Confluence install.
+    const [agreements, escalations] = await Promise.all([svc.visibleAgreements(client, { asUser: true }), svc.loadEscalations(client)]);
     const escByAgreement = new Map();
-    for (const k of escKeys) {
-      const v = await store.get(k);
+    for (const v of escalations) {
       if (!v?.issueKey) continue;
       const id = String(v.agreementId);
-      escByAgreement.set(id, [...(escByAgreement.get(id) || []), { issueKey: v.issueKey, blockerKey: v.blockerKey, dateAtRisk: v.dateAtRisk }]);
+      escByAgreement.set(id, [...(escByAgreement.get(id) || []), { issueKey: v.issueKey, blockerKey: v.blockerKey, dateAtRisk: v.dateAtRisk || null }]);
     }
     const notices = upcomingNotices(agreements, today, days);
     // Open blockers for Due agreements, read as the user, so the agent can
@@ -494,12 +501,9 @@ export async function draftBriefAction(payload) {
     brief.source = source;
     brief.sourceLine = sourceLine(source);
     if (brief.ok !== false) {
-      brief.escalations = [];
-      for (const k of await store.listEscalationKeys()) {
-        if (!k.startsWith(`esc:${a.issueId}:`)) continue;
-        const v = await store.get(k);
-        if (v?.issueKey) brief.escalations.push({ issueKey: v.issueKey, blockerKey: v.blockerKey, dateAtRisk: v.dateAtRisk });
-      }
+      brief.escalations = (await svc.loadEscalations(client).catch(() => []))
+        .filter((v) => String(v.agreementId) === String(a.issueId) && v.issueKey)
+        .map((v) => ({ issueKey: v.issueKey, blockerKey: v.blockerKey, dateAtRisk: v.dateAtRisk || null }));
     }
     if (brief.contractPage) brief.contractPage.message = brief.sourceLine;
     return brief;

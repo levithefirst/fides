@@ -99,6 +99,8 @@ test('zero agreements: empty state with one sentence and a next step', async () 
   site = fakeSite();
   await svc.createAgreement(site.client, { vendor: 'Real Vendor Ltd', endDate: '2030-01-01', noticeDays: 30 });
   await svc.judgeModeSeed(site.client, 'board-open'); // skipped: real data exists
+  // Zero agreements in Jira (the source of truth), not just an empty store.
+  for (const i of [...site.issues.values()]) site.issues.delete(i.key);
   fake.kvs.data.delete([...fake.kvs.data.keys()].find((k) => k.startsWith('agreement:')));
   const v = deriveBoardView(await board(), { rovo: true });
   assert.equal(v.mode, 'empty');

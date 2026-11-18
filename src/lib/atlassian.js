@@ -192,6 +192,26 @@ export async function searchIssues(client, jql, fields = ['summary', 'status', '
   return (res?.issues || []).map(normaliseIssue);
 }
 
+// All matching issues (paged with nextPageToken), up to `cap`.
+export async function searchAll(client, jql, fields, properties = [], cap = 500) {
+  const out = [];
+  let nextPageToken;
+  do {
+    const res = await call(client, 'jira', route`/rest/api/3/search/jql`, {
+      method: 'POST',
+      body: { jql, fields, maxResults: 100, ...(properties.length ? { properties } : {}), ...(nextPageToken ? { nextPageToken } : {}) },
+    });
+    out.push(...(res?.issues || []).map(normaliseIssue));
+    nextPageToken = res?.isLast === false ? res?.nextPageToken : undefined;
+  } while (nextPageToken && out.length < cap);
+  return out.slice(0, cap);
+}
+
+export async function getRemoteLinks(client, issueKey) {
+  const res = await call(client, 'jira', route`/rest/api/3/issue/${issueKey}/remotelink`);
+  return (res || []).map((l) => ({ globalId: l.globalId || null, url: l.object?.url || null, title: l.object?.title || null }));
+}
+
 // Permission-aware fetch of up to 100 issues by id or key. Deleted or
 // hidden issues are simply absent (reported in issueErrors), unlike JQL
 // `key in (...)` which fails the whole query on one bad key.
@@ -251,7 +271,23 @@ export async function getPage(client, pageId) {
     storage: res.body?.storage?.value || '',
     webui: res._links?.webui,
     base: res._links?.base,
+    version: res.version?.number ?? null,
   };
+}
+
+// Replace a page body in place (same id, next version number).
+export async function updatePage(client, { id, title, storage, version, message }) {
+  const res = await call(client, 'confluence', route`/wiki/api/v2/pages/${id}`, {
+    method: 'PUT',
+    body: {
+      id: String(id),
+      status: 'current',
+      title,
+      body: { representation: 'storage', value: storage },
+      version: { number: Number(version) + 1, message: message || 'Updated by Fides to match the agreement in Jira' },
+    },
+  });
+  return { id: res?.id || String(id), version: res?.version?.number ?? Number(version) + 1 };
 }
 
 // Exact-title lookup. Without a space id it searches every space the caller

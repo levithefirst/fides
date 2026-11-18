@@ -14,6 +14,7 @@ import {
   escalationSummary,
   isBlockerOpen,
   escalationKey,
+  dateAtRisk,
 } from './lib/escalation.js';
 import { buildSamples, samplePageTitle, samplePageBody, SAMPLE_VERSION } from './lib/samples.js';
 import { DISCLAIMER } from './lib/brief.js';
@@ -220,16 +221,92 @@ export async function createAgreement(client, input, { sample = false, sampleKey
 // Agreements the caller can see. With a user client this filters by Jira
 // browse permission, so the board and Rovo never show issues the user
 // cannot open.
-export async function visibleAgreements(client, { asUser }) {
-  const all = await store.listAgreements();
-  if (!asUser || !all.length) return all;
-  const ids = all.map((a) => String(a.issueId)).filter(Boolean);
-  const visible = new Set();
-  for (let i = 0; i < ids.length; i += 100) {
-    const found = await jira.bulkFetch(client, ids.slice(i, i + 100), ['summary']);
-    found.forEach((f) => visible.add(String(f.id)));
+export async function visibleAgreements(client, { asUser } = {}) {
+  return loadAgreements(client, { asUser });
+}
+
+const AGREEMENT_FIELDS = ['summary', 'labels', 'status', 'project', 'description', 'created'];
+
+// Jira, not app storage, is the source of truth for reads. App storage is
+// per product install (the Confluence install's is empty), so an empty
+// store must never mean "no agreements". Loads every fides-agreement issue
+// the caller can see (JQL is permission-aware for a user client), builds
+// each record from the issue property (or the description), overlays what
+// this install's storage knows, and hydrates storage with what it lacked.
+export async function loadAgreements(client, { hydrate = true } = {}) {
+  const [issues, cached] = await Promise.all([
+    jira.searchAll(client, `labels = "${LABELS.AGREEMENT}" ORDER BY created ASC`, AGREEMENT_FIELDS, [AGREEMENT_PROP]),
+    store.listAgreements(),
+  ]);
+  const byId = new Map(cached.filter((a) => a?.issueId).map((a) => [String(a.issueId), a]));
+  const out = [];
+  const seenSample = new Set();
+  const toHydrate = [];
+  const add = (rec, kv) => {
+    // One sample per sample key (the oldest), matching ensureSample.
+    if (rec.sample && rec.sampleKey) {
+      if (seenSample.has(rec.sampleKey)) return;
+      seenSample.add(rec.sampleKey);
+    }
+    out.push(rec);
+    if (!kv || (rec.hasProperty && PROP_FIELDS.some((k) => (kv[k] ?? null) !== (rec[k] ?? null)))) toHydrate.push(rec);
+  };
+  for (const issue of issues) add(mergeRecord(recordFromIssue(issue), byId.get(String(issue.id))), byId.get(String(issue.id)));
+
+  // Created moments ago and not in the search index yet (JQL is eventually
+  // consistent): confirm with a permission-aware bulk fetch, which is not.
+  const inJql = new Set(issues.map((i) => String(i.id)));
+  const pending = cached.filter((a) => a?.issueId && !inJql.has(String(a.issueId)));
+  for (let i = 0; i < pending.length; i += 100) {
+    const found = await jira.bulkFetch(client, pending.slice(i, i + 100).map((a) => String(a.issueId)), ['summary', 'labels']).catch(() => []);
+    const ok = new Set(found.map((f) => String(f.id)));
+    for (const a of pending.slice(i, i + 100)) if (ok.has(String(a.issueId))) add(a, a);
   }
-  return all.filter((a) => visible.has(String(a.issueId)));
+  if (hydrate && toHydrate.length) await Promise.all(toHydrate.map((r) => store.saveAgreement(r).catch(() => {})));
+  return out;
+}
+
+// The issue property is shared by every product install; where it has a
+// value it wins. Otherwise this install's storage fills gaps the
+// description could not.
+function mergeRecord(fromIssue, kv) {
+  if (!kv) return fromIssue;
+  const merged = { ...fromIssue, ...Object.fromEntries(Object.entries(kv).filter(([, v]) => v !== null && v !== undefined && v !== '')) };
+  if (fromIssue.hasProperty) for (const k of PROP_FIELDS) if (fromIssue[k] !== null && fromIssue[k] !== undefined && fromIssue[k] !== '') merged[k] = fromIssue[k];
+  for (const k of ['issueId', 'issueKey', 'projectId', 'projectKey', 'summary', 'sample', 'hasProperty']) merged[k] = fromIssue[k] ?? merged[k];
+  merged.propertyPageId = fromIssue.propertyPageId;
+  return merged;
+}
+
+// Escalations from this install's storage merged with Jira: one JQL on the
+// fides-escalation label, keyed by the fides-esc-<agreementId>-<blockerId>
+// label (oldest issue wins). Pairs this install did not know are written to
+// storage, so escalateAgreement treats them as existing (no duplicates).
+export async function loadEscalations(client) {
+  const [keys, issues] = await Promise.all([
+    store.listEscalationKeys(),
+    jira.searchAll(client, `labels = "${LABELS.ESCALATION}" ORDER BY created ASC`, ['summary', 'labels', 'status', 'issuelinks', 'created']).catch(() => []),
+  ]);
+  const byKey = new Map();
+  await Promise.all(
+    [...keys].map(async (k) => {
+      const v = await store.get(k).catch(() => null);
+      if (v?.issueKey) byKey.set(k, v);
+    })
+  );
+  const hydrate = [];
+  for (const i of issues) {
+    const m = i.labels.map((l) => /^fides-esc-(\d+)-(\d+)$/.exec(l)).find(Boolean);
+    if (!m) continue;
+    const k = escalationKey(m[1], m[2]);
+    if (byKey.has(k)) continue;
+    const blocker = i.links.find((l) => String(l.id) === String(m[2]));
+    const rec = { state: 'done', issueKey: i.key, agreementId: m[1], blockerId: m[2], blockerKey: blocker?.key || null, riskKind: 'notice', adopted: true, at: i.created || new Date().toISOString() };
+    byKey.set(k, rec);
+    hydrate.push([k, rec]);
+  }
+  await Promise.all(hydrate.map(([k, v]) => store.claim(k, v).catch(() => {})));
+  return [...byKey.entries()].map(([k, v]) => ({ key: k, ...v }));
 }
 
 // Resolve an agreement reference (vendor name first, then issue key or id;
@@ -383,7 +460,7 @@ export async function escalateAgreement(client, agreement, today, existing, { kn
 }
 
 export async function escalateAll(client, agreements, today = todayIso()) {
-  const existing = await store.listEscalationKeys();
+  const existing = new Set((await loadEscalations(client)).map((e) => e.key));
   const result = { created: [], existing: [], errors: [] };
   // Most urgent first so the RED agreement is handled before anything else.
   const ordered = agreements.map((a) => evaluate(a, today)).filter((a) => !a.invalid && a.status === STATUS.DUE);
@@ -410,7 +487,7 @@ export async function runScan(client, source) {
   try {
     const bf = await backfillSamplePages(client).catch((e) => ({ errors: [e.message] }));
     stamp.pagesLinked = bf.linked?.length || 0;
-    const agreements = await store.listAgreements();
+    const agreements = await loadAgreements(client);
     // Escalations first: they are the time-critical signal.
     const esc = await escalateAll(client, agreements, today);
     stamp.escalationsCreated = esc.created.length;
@@ -467,6 +544,7 @@ const propertyRecord = (r) => Object.fromEntries([['v', 1], ...PROP_FIELDS.map((
 // product install with its own storage).
 export function recordFromIssue(issue, def = null) {
   const prop = issue.properties?.[AGREEMENT_PROP];
+  const labels = issue.labels || [];
   const text = issue.descriptionText || '';
   const grab = (re) => re.exec(text)?.[1]?.trim() ?? null;
   const parsed = {
@@ -491,10 +569,13 @@ export function recordFromIssue(issue, def = null) {
     ownerAccountId: base.ownerAccountId || null,
     ownerResolution: base.ownerAccountId ? 'picked' : 'none',
     obligations: pick('obligations') || '',
-    confluencePageId: base.confluencePageId || jira.parsePageRef(confluenceUrl) || null,
+    confluencePageId: base.confluencePageId ? String(base.confluencePageId) : jira.parsePageRef(confluenceUrl) || null,
     confluenceUrl,
-    sample: true,
-    sampleKey: base.sampleKey || def?.sampleKey || null,
+    sample: labels.includes(LABELS.SAMPLE) || base.sample === true,
+    sampleKey: base.sampleKey || def?.sampleKey || labels.map((l) => /^fides-sample-([a-z0-9]+)$/.exec(l)?.[1]).find(Boolean) || null,
+    hasProperty: Boolean(prop),
+    // What the shared issue property itself says (may lag the record).
+    propertyPageId: prop?.confluencePageId ? String(prop.confluencePageId) : null,
     summary: issue.summary,
     issueId: issue.id,
     issueKey: issue.key,
@@ -532,7 +613,8 @@ async function ensureSample(client, s, cfg, space, base) {
   const title = samplePageTitle(s.vendor);
   const [existingIssue, existingPage] = await Promise.all([
     findSampleIssue(client, s.sampleKey),
-    space ? jira.findPageByTitle(client, space.id, title).catch(() => null) : null,
+    // Any space: a sample page may live outside the space pickSpace returns.
+    space ? jira.findPageByTitle(client, null, title).catch(() => null) : null,
   ]);
 
   if (existingIssue) {
@@ -600,21 +682,73 @@ async function createSampleBlocker(client, s, cfg, agreement) {
 // (required) and on its review and escalation issues (best effort), then
 // store the page id. Remote links use a stable globalId, so a rerun updates
 // rather than duplicates.
-async function linkAgreementPage(client, agreement, pageId, url) {
+export async function linkAgreementPage(client, agreement, pageId, url) {
   const title = `Contract page: ${agreement.vendor}`;
   const gid = jira.pageGlobalId(pageId);
   await jira.addRemoteLink(client, agreement.issueKey, url, title, gid);
   const related = [];
   const review = await store.get(store.keys.review(agreement.issueId));
   if (review?.issueKey) related.push(review.issueKey);
-  for (const k of await store.listEscalationKeys()) {
-    if (!k.startsWith(`esc:${agreement.issueId}:`)) continue;
-    const v = await store.get(k);
-    if (v?.issueKey) related.push(v.issueKey);
+  for (const e of await loadEscalations(client).catch(() => [])) {
+    if (String(e.agreementId) === String(agreement.issueId) && e.issueKey) related.push(e.issueKey);
   }
-  await Promise.all(related.map((key) => jira.addRemoteLink(client, key, url, title, gid).catch(() => {})));
+  await Promise.all([...new Set(related)].map((key) => jira.addRemoteLink(client, key, url, title, gid).catch(() => {})));
   const fresh = (await store.get(store.keys.agreement(agreement.issueId))) || agreement;
-  await store.saveAgreement({ ...fresh, confluencePageId: pageId, confluenceUrl: url });
+  const saved = await store.saveAgreement({ ...fresh, confluencePageId: String(pageId), confluenceUrl: url });
+  await store.set(store.keys.pageAgreement(pageId), { issueId: saved.issueId });
+  // Shared by every product install: write the page onto the issue property.
+  await writeAgreementProperty(client, saved);
+  return saved;
+}
+
+export async function writeAgreementProperty(client, record) {
+  try {
+    await jira.setIssueProperty(client, record.issueKey, AGREEMENT_PROP, propertyRecord(record));
+  } catch (e) {
+    console.warn(`Fides ${record.issueKey}: could not update the agreement issue property: ${e.message}`);
+  }
+}
+
+// ---------- sample pages match the Jira dates ----------
+
+const SAMPLE_PAGE_PREFIX = 'Fides sample contract:';
+const pageMatchesRecord = (storage, a) =>
+  String(storage || '').includes(`<td>${a.endDate}</td>`) && String(storage || '').includes(`<td>${a.noticeDays} days</td>`);
+
+// If a sample page's body dates differ from its Jira record (pages written
+// by an earlier seed), rewrite that page in place: same id, next version,
+// body from samplePageBody. Never creates a page, never touches a page that
+// is not a Fides sample page. Remembered per page so it runs once.
+export async function syncSamplePage(client, agreement) {
+  if (!agreement?.sample || !agreement.confluencePageId || !agreement.endDate) return 'skipped';
+  const marker = `${agreement.endDate}|${agreement.noticeDays}`;
+  const k = `pageSynced:${agreement.confluencePageId}`;
+  if ((await store.get(k).catch(() => null)) === marker) return 'in-sync';
+  const page = await jira.getPage(client, agreement.confluencePageId);
+  if (!String(page.title || '').startsWith(SAMPLE_PAGE_PREFIX)) return 'not-a-sample-page';
+  let result = 'in-sync';
+  if (!pageMatchesRecord(page.storage, agreement)) {
+    await jira.updatePage(client, { id: page.id, title: page.title, storage: samplePageBody(agreement), version: page.version ?? 1 });
+    result = 'updated';
+  }
+  await store.set(k, marker).catch(() => {});
+  return result;
+}
+
+export async function syncSamplePages(client, agreements) {
+  const out = { updated: [], errors: [] };
+  await Promise.all(
+    agreements
+      .filter((a) => a.sample && a.confluencePageId)
+      .map(async (a) => {
+        try {
+          if ((await syncSamplePage(client, a)) === 'updated') out.updated.push(a.issueKey);
+        } catch (e) {
+          out.errors.push(`${a.issueKey}: ${e.message}`);
+        }
+      })
+  );
+  return out;
 }
 
 // Sample agreements seeded before Confluence was reachable (for example the
@@ -623,9 +757,30 @@ async function linkAgreementPage(client, agreement, pageId, url) {
 // create it only if Confluence answered that none exists. Never duplicates
 // pages; does nothing (no API calls) when every sample is already linked.
 export async function backfillSamplePages(client, { createMissing = true } = {}) {
-  const out = { linked: [], created: [], errors: [], forbidden: false };
-  const todo = (await store.listAgreements()).filter((a) => a.sample && a.sampleKey && a.issueKey && !a.confluencePageId);
-  if (!todo.length) return out;
+  const out = { linked: [], created: [], errors: [], forbidden: false, synced: [] };
+  const all = await loadAgreements(client);
+  const todo = all.filter((a) => a.sample && a.sampleKey && a.issueKey && !a.confluencePageId);
+  // Linked, but the shared issue property never learnt the page (written by
+  // an older version into one install's storage only): heal it.
+  for (const a of all.filter((x) => x.confluencePageId && x.confluenceUrl && x.issueKey && x.propertyPageId !== String(x.confluencePageId))) {
+    try {
+      await linkAgreementPage(client, a, String(a.confluencePageId), a.confluenceUrl);
+      a.propertyPageId = String(a.confluencePageId);
+      out.healed = [...(out.healed || []), a.issueKey];
+    } catch (e) {
+      out.errors.push(`${a.issueKey}: ${e.message}`);
+    }
+  }
+  const sync = async () => {
+    const list = out.linked.length ? await loadAgreements(client, { hydrate: false }).catch(() => all) : all;
+    const r = await syncSamplePages(client, list);
+    out.synced = r.updated;
+    out.errors.push(...r.errors);
+  };
+  if (!todo.length) {
+    await sync();
+    return out;
+  }
   const base = await siteBase(client).catch(() => '');
   let spacePromise = null;
   const space = () => (spacePromise ??= jira.pickSpace(client).catch(() => null));
@@ -662,6 +817,7 @@ export async function backfillSamplePages(client, { createMissing = true } = {})
       }
     })
   );
+  await sync();
   return out;
 }
 
@@ -761,6 +917,8 @@ export async function judgeModeSeed(client, source, { force = false } = {}) {
     stamp.errors.unshift(...failed);
     await Promise.all(seeded.map((a) => a.pending).filter(Boolean));
     const scan = await saveStamp(stamp);
+    // Pages left by an earlier seed may carry older dates: match them to Jira.
+    await syncSamplePages(client, seeded).catch(() => {});
     // Nothing could be created because the user lacks permission: say so
     // instead of showing an empty board.
     if (!seeded.length && rejected.length && rejected.every((e) => e instanceof ApiError && e.permissionDenied)) {
@@ -827,26 +985,29 @@ export async function boardData(client, { asUser, accountId = null } = {}) {
 
 async function computeBoard(client, { asUser }) {
   const today = todayIso();
-  const [cfg, seed, lastRun, escKeys] = await Promise.all([
+  const [cfg, seed, lastRun, loaded, escRecords] = await Promise.all([
     store.get(store.keys.config),
     store.get(store.keys.seed),
     store.get(store.keys.lastRun),
-    store.listEscalationKeys(),
+    loadAgreements(client),
+    loadEscalations(client),
   ]);
-  const agreements = (await visibleAgreements(client, { asUser })).map((a) => evaluate(a, today));
+  const agreements = loaded.map((a) => evaluate(a, today));
   agreements.sort((a, b) => (a.invalid ? 1 : 0) - (b.invalid ? 1 : 0) || a.daysLeft - b.daysLeft);
-  const escalations = [];
-  for (const k of escKeys) {
-    const v = await store.get(k);
-    if (v?.issueKey) escalations.push(v);
-  }
+  const byAgreement = new Map(agreements.map((a) => [String(a.issueId), a]));
+  // Escalations found in Jira carry only ids: fill vendor and date from the agreement.
+  const escalations = escRecords.map((e) => {
+    const a = byAgreement.get(String(e.agreementId));
+    const risk = a && !e.dateAtRisk ? dateAtRisk(a, today) : null;
+    return { ...e, vendor: e.vendor || a?.vendor || null, agreementKey: e.agreementKey || a?.issueKey || null, dateAtRisk: e.dateAtRisk || risk?.date || null, riskKind: e.riskKind || risk?.kind || 'notice' };
+  });
   const base = cfg?.baseUrl || (await siteBase(client).catch(() => ''));
   const visibleIds = new Set(agreements.map((a) => String(a.issueId)));
   // What this user can do in the Fides project, so the board can go
   // read-only instead of failing on a create. Unknown (null) on error.
   const permissionsP =
     asUser && cfg?.projectKey
-      ? await jira
+      ? jira
           .myPermissions(client, cfg.projectKey, ['CREATE_ISSUES', 'BROWSE_PROJECTS', 'ADMINISTER'])
           .then((p) => ({ projectKey: cfg.projectKey, canCreate: p.CREATE_ISSUES, canBrowse: p.BROWSE_PROJECTS, isAdmin: p.ADMINISTER }))
           .catch(() => null)
@@ -894,8 +1055,8 @@ async function computeBoard(client, { asUser }) {
 
 // ---------- paste-rows import ----------
 
-export async function previewImport(text) {
-  return parseImport(text, await store.listAgreements());
+export async function previewImport(client, text) {
+  return parseImport(text, await loadAgreements(client));
 }
 
 // Import rows [from, to) of a paste, through the same createAgreement path
@@ -903,7 +1064,7 @@ export async function previewImport(text) {
 // a client-side preview. Batches of 5 in parallel; each row reports
 // created, skipped or failed.
 export async function importAgreements(client, text, { from = 0, to = MAX_ROWS, batchSize = 5 } = {}) {
-  const parsed = parseImport(text, await store.listAgreements());
+  const parsed = parseImport(text, await loadAgreements(client));
   if (!parsed.ok) return { ok: false, error: parsed.error, results: [] };
   const slice = parsed.rows.slice(from, Math.min(to, MAX_ROWS));
   const results = [];
@@ -953,18 +1114,65 @@ async function locatePage(client, ref, contextContentId) {
   return found ? jira.getPage(client, found.id) : null;
 }
 
-async function agreementForPage(pageId) {
-  const rec = await store.get(store.keys.pageAgreement(pageId));
-  if (rec?.issueId) {
-    const a = await store.get(store.keys.agreement(rec.issueId));
-    if (a) return a;
+// Is this page already tracked? Jira-backed, in order:
+//   1. by the page link: this install's pageAgreement record, the page id on
+//      the issue property (or record), then the agreements' remote links
+//      (globalId or URL). A page match wins even if the page dates differ.
+//   2. by vendor + end date, the same rule as paste import.
+async function agreementForPage(client, page, agreements, candidate = {}) {
+  const pid = String(page.id);
+  const onPage = (a) => String(a.confluencePageId || '') === pid || jira.parsePageRef(a.confluenceUrl) === pid;
+  const rec = await store.get(store.keys.pageAgreement(pid)).catch(() => null);
+  const byRecord = rec?.issueId ? agreements.find((a) => String(a.issueId) === String(rec.issueId)) : null;
+  if (byRecord) return { agreement: byRecord, matchedBy: 'page' };
+  const byId = agreements.find(onPage);
+  if (byId) return { agreement: byId, matchedBy: 'page' };
+  // Remote links: CLSD-35 style records whose property never learnt the page.
+  const gid = jira.pageGlobalId(pid);
+  const unlinked = agreements.filter((a) => !a.confluencePageId).slice(0, 100);
+  const hits = await Promise.all(
+    unlinked.map(async (a) => {
+      const links = await jira.getRemoteLinks(client, a.issueKey).catch(() => []);
+      return links.some((l) => l.globalId === gid || jira.parsePageRef(l.url) === pid) ? a : null;
+    })
+  );
+  const byLink = hits.find(Boolean);
+  if (byLink) return { agreement: byLink, matchedBy: 'page' };
+  if (candidate.vendor && candidate.endDate) {
+    const k = dupKey(candidate.vendor, candidate.endDate);
+    const same = agreements.find((a) => dupKey(a.vendor, a.endDate) === k);
+    if (same) return { agreement: same, matchedBy: 'vendor and end date' };
   }
-  return (await store.listAgreements()).find((a) => String(a.confluencePageId) === String(pageId)) || null;
+  return null;
+}
+
+// Record the page on the agreement (this install's storage and the shared
+// issue property), without creating anything.
+async function adoptPage(client, agreement, page, url) {
+  if (agreement.propertyPageId === String(page.id)) {
+    await store.set(store.keys.pageAgreement(page.id), { issueId: agreement.issueId }).catch(() => {});
+    return agreement;
+  }
+  return linkAgreementPage(client, agreement, String(page.id), agreement.confluenceUrl || url);
+}
+
+function existingResult(m, page, pageInfo, extracted) {
+  const a = m.agreement;
+  const pageEnd = extracted?.endDate?.value || null;
+  return {
+    status: 'existing',
+    page: pageInfo,
+    matchedBy: m.matchedBy,
+    agreement: { issueKey: a.issueKey, vendor: a.vendor, endDate: a.endDate, noticeDays: a.noticeDays },
+    ...(pageEnd && pageEnd !== a.endDate ? { pageDiffers: `The page says the end date is ${pageEnd}; Fides tracks ${a.endDate} on ${a.issueKey} in Jira.` } : {}),
+    message: `This page is already tracked as ${a.issueKey} ${a.vendor} (matched by ${m.matchedBy}). Nothing new was created.`,
+  };
 }
 
 // Read a contract page as the user, propose structured fields with quoted
-// sources, and create the agreement only when `confirm` is true. One
-// agreement per page id: a second run returns the existing one.
+// sources, and create the agreement only when `confirm` is true. Dedupe is
+// Jira-backed (see agreementForPage), so it gives the same answer from the
+// Jira and the Confluence install.
 export async function trackAgreementFromPage(client, { pageRef, contextContentId = null, confirm = false, overrides = {} } = {}) {
   let page;
   try {
@@ -977,19 +1185,8 @@ export async function trackAgreementFromPage(client, { pageRef, contextContentId
   const url = page.base && page.webui ? `${page.base}${page.webui}` : null;
   const pageInfo = { id: String(page.id), title: page.title, url };
 
-  const existing = await agreementForPage(page.id);
-  if (existing) {
-    return {
-      status: 'existing',
-      page: pageInfo,
-      agreement: { issueKey: existing.issueKey, vendor: existing.vendor, endDate: existing.endDate, noticeDays: existing.noticeDays },
-      message: `This page is already tracked as ${existing.issueKey} ${existing.vendor}. Nothing new was created.`,
-    };
-  }
-
   const ex = extractAgreement({ title: page.title, storage: page.storage, text: storageToText(page.storage) });
   const proposal = { ...ex.fields };
-  // The agent (or the user) can fill or correct any field.
   const merged = {
     vendor: overrides.vendor ?? proposal.vendor?.value ?? null,
     endDate: overrides.endDate ?? proposal.endDate?.value ?? null,
@@ -997,6 +1194,14 @@ export async function trackAgreementFromPage(client, { pageRef, contextContentId
     owner: overrides.owner ?? proposal.owner?.value ?? '',
     obligations: overrides.obligations ?? proposal.obligations.map((o) => o.value).join(' '),
   };
+
+  let agreements = await loadAgreements(client);
+  const hit = await agreementForPage(client, page, agreements, merged);
+  if (hit) {
+    await adoptPage(client, hit.agreement, page, url).catch(() => {});
+    return existingResult(hit, page, pageInfo, ex.fields);
+  }
+
   for (const k of ['vendor', 'endDate', 'noticeDays', 'owner']) {
     if (overrides[k] !== undefined && overrides[k] !== null && overrides[k] !== '') {
       proposal[k] = { value: overrides[k], source: 'Provided in Rovo Chat', confidence: 'confirmed' };
@@ -1025,8 +1230,13 @@ export async function trackAgreementFromPage(client, { pageRef, contextContentId
     return { status: 'busy', page: pageInfo, message: 'This page is being tracked right now. Ask again in a moment.' };
   }
   try {
-    const again = await agreementForPage(page.id);
-    if (again) return { status: 'existing', page: pageInfo, agreement: { issueKey: again.issueKey, vendor: again.vendor }, message: `This page is already tracked as ${again.issueKey} ${again.vendor}.` };
+    // Re-check in Jira under the lock.
+    agreements = await loadAgreements(client);
+    const again = await agreementForPage(client, page, agreements, merged);
+    if (again) {
+      await adoptPage(client, again.agreement, page, url).catch(() => {});
+      return existingResult(again, page, pageInfo, ex.fields);
+    }
     const a = await createAgreement(client, {
       vendor: merged.vendor,
       endDate: merged.endDate,
