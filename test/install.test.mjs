@@ -167,3 +167,72 @@ test('draft-brief says explicitly when the page cannot be read', async () => {
   const nb = await actions.draftBriefAction({ agreement: 'Quay' });
   assert.match(nb.sourceLine, /^Source: no Confluence contract page is linked/);
 });
+
+// ---------- item 1: track-agreement-from-page ----------
+
+test('track-agreement-from-page: proposal first, create on confirm, idempotent per page', async () => {
+  const actions = await import('../src/index.js');
+  site = fakeSite();
+  await installed({});
+  const pageId = site.addPage({
+    title: 'Brightwater Logistics Master Services Agreement',
+    storage: "<p>The Initial Term expires on 31 December 2027.</p><p>Either party may terminate by giving thirty (30) days' written notice.</p><p>The Supplier shall provide a monthly service report.</p><p>Contract owner: Dana Whitfield</p>",
+  });
+  const url = `${site.base}/wiki/spaces/EO/pages/${pageId}`;
+  const before = site.issues.size;
+
+  const p = await actions.trackAgreementFromPageAction({ page: url });
+  assert.equal(p.status, 'proposal');
+  assert.equal(p.proposal.vendor.value, 'Brightwater Logistics');
+  assert.equal(p.proposal.endDate.value, '2027-12-31');
+  assert.match(p.proposal.noticeDays.source, /thirty \(30\) days/);
+  assert.equal(site.issues.size, before, 'nothing created before confirmation');
+
+  const c = await actions.trackAgreementFromPageAction({ page: url, confirm: true });
+  assert.equal(c.status, 'created');
+  const issue = site.issues.get(c.agreement.issueKey);
+  assert.ok(issue.labels.includes('fides-agreement'));
+  assert.equal(issue.remote.length, 1, 'remote link to the page');
+  assert.ok(issue.remote[0].url.includes(`/pages/${pageId}`));
+
+  const again = await actions.trackAgreementFromPageAction({ page: url, confirm: true });
+  assert.equal(again.status, 'existing');
+  assert.equal(again.agreement.issueKey, c.agreement.issueKey);
+  assert.equal(site.issues.size, before + 1);
+  // By title, too.
+  assert.equal((await actions.trackAgreementFromPageAction({ page: 'Brightwater Logistics Master Services Agreement' })).status, 'existing');
+});
+
+test('track-agreement-from-page: "add Helios from its page" returns the existing sample agreement', async () => {
+  const actions = await import('../src/index.js');
+  site = fakeSite();
+  await installed({});
+  const r = await actions.trackAgreementFromPageAction({ page: 'Fides sample contract: Helios Payroll', confirm: true });
+  assert.equal(r.status, 'existing');
+  assert.equal(r.agreement.vendor, 'Helios Payroll');
+});
+
+test('track-agreement-from-page: missing fields need input; the agent can fill them', async () => {
+  const actions = await import('../src/index.js');
+  site = fakeSite();
+  await installed({});
+  const pageId = site.addPage({ title: 'Pinecrest Media notes', storage: '<p>We discussed the vendor relationship with Pinecrest Media.</p>' });
+  const r = await actions.trackAgreementFromPageAction({ page: pageId, confirm: true });
+  assert.equal(r.status, 'needs-input');
+  assert.deepEqual(r.missing.sort(), ['endDate', 'noticeDays', 'vendor'].sort());
+  const ok = await actions.trackAgreementFromPageAction({ page: pageId, confirm: true, vendor: 'Pinecrest Media', endDate: '2027-06-30', noticeDays: 60 });
+  assert.equal(ok.status, 'created');
+});
+
+test('track-agreement-from-page: unreadable page says so and creates nothing', async () => {
+  const actions = await import('../src/index.js');
+  site = fakeSite();
+  await installed({});
+  const pageId = site.addPage({ title: 'Secret contract', storage: '<p>x</p>' });
+  site.state.confluence = false;
+  const before = site.issues.size;
+  const r = await actions.trackAgreementFromPageAction({ page: pageId, confirm: true });
+  assert.equal(r.status, 'unreadable');
+  assert.match(r.message, /^I cannot read this page\./);
+  assert.equal(site.issues.size, before);
+});

@@ -155,7 +155,7 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
       }
       if ((m = /^\/wiki\/api\/v2\/pages\/(\d+)\?/.exec(p))) {
         const pg = pages.get(m[1]);
-        return pg ? json(200, { id: pg.id, title: pg.title, body: { storage: { value: pg.storage } }, _links: { webui: `/x/${pg.id}`, base: `${base}/wiki` } }) : json(404, {});
+        return pg ? json(200, { id: pg.id, title: pg.title, body: { storage: { value: pg.storage } }, _links: { webui: `/spaces/${pg.spaceKey || "LEGAL"}/pages/${pg.id}`, base: `${base}/wiki` } }) : json(404, {});
       }
     }
     throw new Error(`fake site: unhandled ${product} ${method} ${p}`);

@@ -18,6 +18,8 @@ import {
 import { buildSamples, samplePageTitle, samplePageBody, SAMPLE_VERSION } from './lib/samples.js';
 import { DISCLAIMER } from './lib/brief.js';
 import { matchAgreement } from './lib/match.js';
+import { extractAgreement } from './lib/extract.js';
+import { storageToText } from './lib/brief.js';
 
 const sampleLabel = (k) => `fides-sample-${k}`;
 
@@ -652,6 +654,116 @@ export async function boardData(client, { asUser }) {
     },
     disclaimer: DISCLAIMER,
   };
+}
+
+// ---------- track an agreement from its Confluence page ----------
+
+export const UNREADABLE_PAGE =
+  'I cannot read this page. You may not have permission to view it, or Fides is not connected to Confluence on this site. Share the page with yourself or paste the dates and I will track it from those.';
+
+async function locatePage(client, ref, contextContentId) {
+  const id = jira.parsePageRef(ref) || (!ref || /^(this|this page|current page)$/i.test(String(ref).trim()) ? contextContentId : null);
+  if (id) return jira.getPage(client, id);
+  const found = await jira.findPageByTitle(client, null, String(ref).trim());
+  return found ? jira.getPage(client, found.id) : null;
+}
+
+async function agreementForPage(pageId) {
+  const rec = await store.get(store.keys.pageAgreement(pageId));
+  if (rec?.issueId) {
+    const a = await store.get(store.keys.agreement(rec.issueId));
+    if (a) return a;
+  }
+  return (await store.listAgreements()).find((a) => String(a.confluencePageId) === String(pageId)) || null;
+}
+
+// Read a contract page as the user, propose structured fields with quoted
+// sources, and create the agreement only when `confirm` is true. One
+// agreement per page id: a second run returns the existing one.
+export async function trackAgreementFromPage(client, { pageRef, contextContentId = null, confirm = false, overrides = {} } = {}) {
+  let page;
+  try {
+    page = await locatePage(client, pageRef, contextContentId);
+  } catch (e) {
+    if (e instanceof ApiError && (e.forbidden || e.notFound)) return { status: 'unreadable', message: UNREADABLE_PAGE };
+    throw e;
+  }
+  if (!page) return { status: 'not-found', message: `I could not find a Confluence page called "${pageRef}". Paste the page link instead.` };
+  const url = page.base && page.webui ? `${page.base}${page.webui}` : null;
+  const pageInfo = { id: String(page.id), title: page.title, url };
+
+  const existing = await agreementForPage(page.id);
+  if (existing) {
+    return {
+      status: 'existing',
+      page: pageInfo,
+      agreement: { issueKey: existing.issueKey, vendor: existing.vendor, endDate: existing.endDate, noticeDays: existing.noticeDays },
+      message: `This page is already tracked as ${existing.issueKey} ${existing.vendor}. Nothing new was created.`,
+    };
+  }
+
+  const ex = extractAgreement({ title: page.title, storage: page.storage, text: storageToText(page.storage) });
+  const proposal = { ...ex.fields };
+  // The agent (or the user) can fill or correct any field.
+  const merged = {
+    vendor: overrides.vendor ?? proposal.vendor?.value ?? null,
+    endDate: overrides.endDate ?? proposal.endDate?.value ?? null,
+    noticeDays: overrides.noticeDays ?? proposal.noticeDays?.value ?? null,
+    owner: overrides.owner ?? proposal.owner?.value ?? '',
+    obligations: overrides.obligations ?? proposal.obligations.map((o) => o.value).join(' '),
+  };
+  for (const k of ['vendor', 'endDate', 'noticeDays', 'owner']) {
+    if (overrides[k] !== undefined && overrides[k] !== null && overrides[k] !== '') {
+      proposal[k] = { value: overrides[k], source: 'Provided in Rovo Chat', confidence: 'confirmed' };
+    }
+  }
+  const missing = ['vendor', 'endDate', 'noticeDays'].filter((k) => merged[k] === null || merged[k] === '');
+  const lowConfidence = ex.lowConfidence.filter((k) => overrides[k] === undefined);
+
+  if (!confirm) {
+    return {
+      status: 'proposal',
+      page: pageInfo,
+      proposal,
+      missing,
+      lowConfidence,
+      sourceLine: `Source: ${page.title}${url ? ` (${url})` : ''}`,
+      nextStep: missing.length
+        ? `Ask the user for: ${missing.join(', ')}. Then call again with confirm true and those values.`
+        : 'Show this proposal with the quoted sources, flag low-confidence fields, and ask the user to confirm or correct. Then call again with confirm true.',
+    };
+  }
+  if (missing.length) return { status: 'needs-input', page: pageInfo, missing, message: `I still need: ${missing.join(', ')}.` };
+
+  // Concurrency guard so two confirmations cannot create two agreements.
+  if (!(await store.claim(store.keys.trackLock(page.id), { at: new Date().toISOString() }, 60))) {
+    return { status: 'busy', page: pageInfo, message: 'This page is being tracked right now. Ask again in a moment.' };
+  }
+  try {
+    const again = await agreementForPage(page.id);
+    if (again) return { status: 'existing', page: pageInfo, agreement: { issueKey: again.issueKey, vendor: again.vendor }, message: `This page is already tracked as ${again.issueKey} ${again.vendor}.` };
+    const a = await createAgreement(client, {
+      vendor: merged.vendor,
+      endDate: merged.endDate,
+      noticeDays: Number(merged.noticeDays),
+      owner: merged.owner,
+      ownerAccountId: overrides.ownerAccountId || null,
+      obligations: merged.obligations,
+      confluencePageId: String(page.id),
+      confluenceUrl: url,
+    });
+    if (a.pending) await a.pending;
+    await store.set(store.keys.pageAgreement(page.id), { issueId: a.issueId });
+    const base = await siteBase(client).catch(() => '');
+    return {
+      status: 'created',
+      page: pageInfo,
+      agreement: { issueKey: a.issueKey, vendor: a.vendor, endDate: a.endDate, noticeDays: a.noticeDays, url: browse(base, a.issueKey) },
+      message: `Tracking ${a.vendor} as ${a.issueKey}, linked to "${page.title}".`,
+    };
+  } finally {
+    await store.del(store.keys.trackLock(page.id)).catch(() => {});
+  }
 }
 
 export { upcomingNotices, DEFAULT_LOOKAHEAD_DAYS };

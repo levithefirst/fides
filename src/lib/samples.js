@@ -94,8 +94,7 @@ export function samplePageBody(s) {
     '<h2>Key obligations</h2>',
     `<p>${esc(s.obligations)}</p>`,
     '<h2>Termination and renewal</h2>',
-    `<p>This agreement renews automatically unless either party gives written notice at least ${esc(
-      s.noticeDays
-    )} days before the end date.</p>`,
+    `<p>This agreement expires on ${esc(s.endDate)} and renews automatically for a further 12 months.</p>`,
+    `<p>Either party may terminate by giving ${esc(s.noticeDays)} days' written notice before the end date.</p>`,
   ].join('');
 }

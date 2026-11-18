@@ -369,6 +369,28 @@ export async function escalateThreatenedMilestones(payload) {
   }
 }
 
+// Rovo action: track-agreement-from-page. Proposal first; creates only when
+// the user has confirmed (confirm: true). Idempotent per Confluence page.
+export async function trackAgreementFromPageAction(payload) {
+  try {
+    const client = api.asUser();
+    const overrides = {};
+    if (payload?.vendor) overrides.vendor = String(payload.vendor);
+    if (payload?.endDate) overrides.endDate = String(payload.endDate);
+    if (payload?.noticeDays !== undefined && payload?.noticeDays !== null && payload?.noticeDays !== '') overrides.noticeDays = Number(payload.noticeDays);
+    if (payload?.owner) overrides.owner = String(payload.owner);
+    const r = await svc.trackAgreementFromPage(client, {
+      pageRef: payload?.page,
+      contextContentId: payload?.context?.confluence?.contentId || null,
+      confirm: payload?.confirm === true || payload?.confirm === 'true',
+      overrides,
+    });
+    return { ...r, disclaimer: DISCLAIMER };
+  } catch (e) {
+    return { status: 'error', error: friendly(e), disclaimer: DISCLAIMER };
+  }
+}
+
 // The line the agent must include in every brief, verbatim.
 export function sourceLine(src) {
   switch (src.status) {

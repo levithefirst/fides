@@ -42,11 +42,13 @@ modules:
         - Escalate threatened milestones
         - Create a review issue for the most urgent agreement
         - Draft a renew or cancel brief for Helios Payroll
+        - Track this contract from its Confluence page
       actions:
         - list-upcoming-notices
         - create-review-issue
         - escalate-threatened-milestones
         - draft-brief
+        - track-agreement-from-page
 
   action:
     - key: list-upcoming-notices
@@ -106,6 +108,44 @@ modules:
           required: false
           description: Set to false to skip reading the linked Confluence page. Defaults to true.
 
+    - key: track-agreement-from-page
+      name: Track agreement from page
+      function: action-track
+      actionVerb: CREATE
+      description: |
+        Read a Confluence contract page as the user and propose an agreement with quoted sources. Call with confirm false first; create only after the user confirms (confirm true). A page already tracked returns its agreement.
+      inputs:
+        page:
+          title: Confluence page
+          type: string
+          required: true
+          description: The Confluence page URL, page id or exact page title. Use "this page" when Rovo is open on the contract page.
+        confirm:
+          title: Confirmed by the user
+          type: boolean
+          required: false
+          description: Set to true only after the user has confirmed the proposal. Defaults to false (proposal only, nothing created).
+        vendor:
+          title: Vendor
+          type: string
+          required: false
+          description: Vendor name, if the user supplied or corrected it.
+        endDate:
+          title: End date
+          type: string
+          required: false
+          description: End date as YYYY-MM-DD, if the user supplied or corrected it.
+        noticeDays:
+          title: Notice period in days
+          type: integer
+          required: false
+          description: Notice period in days, if the user supplied or corrected it.
+        owner:
+          title: Owner
+          type: string
+          required: false
+          description: Agreement owner name or email, if the user supplied or corrected it.
+
   function:
     - key: resolver
       handler: index.handler
@@ -122,6 +162,8 @@ modules:
       handler: index.escalateThreatenedMilestones
     - key: action-brief
       handler: index.draftBriefAction
+    - key: action-track
+      handler: index.trackAgreementFromPageAction
 
 resources:
   - key: board

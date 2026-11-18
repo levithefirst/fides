@@ -12,6 +12,8 @@
 //   sample:<sampleKey>       { issueId } so seeding never duplicates
 //   samplePage:<sampleKey>   { id, url } the sample's Confluence page
 //   lock:page:<sampleKey>    short-lived page-creation lock
+//   pageAgreement:<pageId>   { issueId } agreement tracked from that page
+//   lock:track:<pageId>      short-lived track-from-page lock
 
 import { kvs, WhereConditions } from '@forge/kvs';
 
@@ -21,6 +23,8 @@ export const keys = {
   sample: (k) => `sample:${k}`,
   samplePage: (k) => `samplePage:${k}`,
   pageLock: (k) => `lock:page:${k}`,
+  pageAgreement: (id) => `pageAgreement:${id}`,
+  trackLock: (id) => `lock:track:${id}`,
   config: 'config',
   seed: 'seed',
   seedLock: 'lock:seed',
