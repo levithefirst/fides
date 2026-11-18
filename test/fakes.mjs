@@ -89,6 +89,7 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
       labels: i.labels,
       status: { name: i.status, statusCategory: { key: i.statusCategory } },
       assignee: i.assignee ? { accountId: i.assignee } : null,
+      description: i.description || null,
       project: { id: i.projectId, key: i.projectKey },
       issuelinks: i.links.map((k) => ({ type: { name: 'Blocks' }, outwardIssue: { id: issues.get(k).id, key: k } })),
     },
@@ -118,12 +119,22 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
         const want = body.fields.assignee?.id || null;
         if (want && (state.unassignable.has(want) || !state.users.some((u) => u.accountId === want)))
           return json(400, { errorMessages: [], errors: { assignee: `User '${want}' cannot be assigned issues.` } });
-        issues.set(key, { id, key, summary: body.fields.summary, labels: body.fields.labels || [], status: 'To Do', statusCategory: 'new', projectId: proj.id, projectKey: proj.key, links: [], remote: [], comments: [], watchers: [], assignee: want || state.defaultAssignee });
+        issues.set(key, { id, key, description: body.fields.description || null, properties: {}, summary: body.fields.summary, labels: body.fields.labels || [], status: 'To Do', statusCategory: 'new', projectId: proj.id, projectKey: proj.key, links: [], remote: [], comments: [], watchers: [], assignee: want || state.defaultAssignee });
         return json(201, { id, key });
       }
       if (p === '/rest/api/3/search/jql') {
-        const found = [...issues.values()].filter((i) => matchesJql(i, body.jql)).slice(0, body.maxResults || 50);
-        return json(200, { issues: found.map(view), isLast: true });
+        const jql = body.jql.replace(/\s+ORDER BY\s+created\s+ASC\s*$/i, '');
+        const found = [...issues.values()]
+          .filter((i) => matchesJql(i, jql))
+          .sort((x, y) => Number(x.id) - Number(y.id))
+          .slice(0, body.maxResults || 50);
+        return json(200, {
+          issues: found.map((i) => ({
+            ...view(i),
+            ...(body.properties?.length ? { properties: Object.fromEntries(body.properties.filter((k) => i.properties?.[k]).map((k) => [k, i.properties[k]])) } : {}),
+          })),
+          isLast: true,
+        });
       }
       if (p === '/rest/api/3/issue/bulkfetch' && !state.canBrowse) return json(403, { errorMessages: ['Forbidden'] });
       if (p === '/rest/api/3/issue/bulkfetch') {
@@ -147,6 +158,16 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
         if (i >= 0) remote[i] = entry;
         else remote.push(entry);
         return json(201, { id: 1 });
+      }
+      if ((m = /^\/rest\/api\/3\/issue\/([^/?]+)\/properties\/([^/?]+)$/.exec(p)) && method === 'PUT') {
+        const i = issues.get(m[1]);
+        if (!i) return json(404, { errorMessages: ['Issue does not exist'] });
+        i.properties = { ...(i.properties || {}), [m[2]]: body };
+        return json(200, {});
+      }
+      if ((m = /^\/rest\/api\/3\/issue\/([^/?]+)$/.exec(p)) && method === 'DELETE') {
+        issues.delete(m[1]);
+        return json(204);
       }
       if ((m = /^\/rest\/api\/3\/issue\/([^/?]+)\/watchers$/.exec(p)) && method === 'POST') {
         if (!state.users.some((u) => u.accountId === body)) return json(404, { errorMessages: ['User not found'] });

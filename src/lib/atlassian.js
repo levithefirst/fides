@@ -126,6 +126,13 @@ export async function myPermissions(client, projectKey, keys) {
   return out;
 }
 
+// Issue entity property (write:jira-work): Fides stores the structured
+// agreement record on the Jira issue itself, so Jira, not app storage, is
+// the source of truth for sample idempotency.
+export async function setIssueProperty(client, issueKey, propertyKey, value) {
+  await call(client, 'jira', route`/rest/api/3/issue/${issueKey}/properties/${propertyKey}`, { method: 'PUT', body: value });
+}
+
 export async function addWatcher(client, issueKey, accountId) {
   // The body is the account id as a JSON string.
   await call(client, 'jira', route`/rest/api/3/issue/${issueKey}/watchers`, { method: 'POST', body: String(accountId) });
@@ -147,8 +154,20 @@ export async function getIssue(client, issueIdOrKey) {
   return normaliseIssue(res);
 }
 
+// Plain text of an ADF document (descriptions), for rebuilding records.
+export function adfText(node) {
+  if (!node) return '';
+  if (typeof node === 'string') return node;
+  if (node.type === 'text') return node.text || '';
+  const inner = (node.content || []).map(adfText).join(node.type === 'doc' ? '\n' : '');
+  return node.type === 'paragraph' ? `${inner}\n` : inner;
+}
+
 export function normaliseIssue(i) {
   return {
+    descriptionText: i.fields?.description ? adfText(i.fields.description).trim() : '',
+    properties: i.properties || {},
+    created: i.fields?.created || null,
     id: i.id,
     key: i.key,
     summary: i.fields?.summary,
@@ -165,10 +184,10 @@ export function normaliseIssue(i) {
   };
 }
 
-export async function searchIssues(client, jql, fields = ['summary', 'status', 'labels'], maxResults = 100) {
+export async function searchIssues(client, jql, fields = ['summary', 'status', 'labels'], maxResults = 100, properties = []) {
   const res = await call(client, 'jira', route`/rest/api/3/search/jql`, {
     method: 'POST',
-    body: { jql, fields, maxResults },
+    body: { jql, fields, maxResults, ...(properties.length ? { properties } : {}) },
   });
   return (res?.issues || []).map(normaliseIssue);
 }

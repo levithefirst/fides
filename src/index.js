@@ -216,20 +216,34 @@ function retryLater(retryCount, why) {
   return new InvocationError({ retryAfter, retryReason: InvocationErrorCode.FUNCTION_RETRY_REQUEST });
 }
 
-export async function installed(event) {
+// Which product this installed event is for. Forge passes the install
+// context as an ARI: ari:cloud:jira::site/<id> or ari:cloud:confluence::site/<id>.
+export function installProduct(event, context) {
+  const ari = String(context?.installContext || event?.context?.installContext || event?.installContext || '');
+  if (/^ari:cloud:confluence:/i.test(ari)) return 'confluence';
+  if (/^ari:cloud:jira/i.test(ari)) return 'jira';
+  return 'unknown';
+}
+
+export async function installed(event, context) {
   const retryCount = event?.retryContext?.retryCount || 0;
   const client = api.asApp();
+  const product = installProduct(event, context);
   try {
     const seed = await store.get(store.keys.seed);
-    if (seed?.state !== 'done' && seed?.state !== 'skipped') {
+    // Only the Jira install seeds. A Confluence install (which has its own
+    // app storage) never creates Jira samples; it only links pages. Even
+    // if the product is unknown, seeding adopts existing Jira samples
+    // instead of creating a second set.
+    if (product !== 'confluence' && seed?.state !== 'done' && seed?.state !== 'skipped') {
       // Readiness probe: until permissions propagate the app sees no projects.
       const projects = await jira.listProjects(client).catch((e) => {
         if (e instanceof jira.ApiError && e.forbidden) return [];
         throw e;
       });
       if (!projects.length) return retryLater(retryCount, 'app permissions not ready');
-      const r = await svc.judgeModeSeed(client, 'install');
-      console.log(`Fides judge mode on install: ${r.state}`);
+      const r = await svc.judgeModeSeed(client, `install (${product})`);
+      console.log(`Fides judge mode on install (${product}): ${r.state}${r.adopted ? `, reused ${r.adopted} existing sample agreement(s)` : ''}`);
       if (['needs-project', 'no-projects', 'no-permission', 'partial', 'error'].includes(r.state)) return retryLater(retryCount, `seed ${r.state}`);
     }
     const bf = await svc.backfillSamplePages(client);

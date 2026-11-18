@@ -193,6 +193,10 @@ export async function createAgreement(client, input, { sample = false, sampleKey
     assigneeAccountId: record.ownerAccountId,
   });
   if (issue.warning) console.warn(`Fides ${issue.key}: ${issue.warning}`);
+  // The structured record also lives on the Jira issue, so a reinstall
+  // (empty app storage) can rebuild it instead of creating a duplicate.
+  const propWrite = jira.setIssueProperty(client, issue.key, AGREEMENT_PROP, propertyRecord(record)).catch(() => {});
+  if (!sample) await propWrite;
   const saved = await store.saveAgreement({
     ...record,
     issueId: issue.id,
@@ -206,7 +210,9 @@ export async function createAgreement(client, input, { sample = false, sampleKey
       .addRemoteLink(client, issue.key, record.confluenceUrl, `Contract page: ${record.vendor}`, record.confluencePageId ? jira.pageGlobalId(record.confluencePageId) : undefined)
       .catch(() => {});
     if (!sample) await link; // judge mode does not wait on it
-    else saved.pending = link;
+    else saved.pending = Promise.all([link, propWrite]);
+  } else if (sample) {
+    saved.pending = propWrite;
   }
   return saved;
 }
@@ -249,7 +255,7 @@ export async function findBlockers(client, agreement) {
 
 // ---------- review issues ----------
 
-export async function ensureReviewIssue(client, agreement, { reason = 'notice window' } = {}) {
+export async function ensureReviewIssue(client, agreement, { reason = 'notice window', fresh = false } = {}) {
   const base = await siteBase(client);
   const existing = await store.get(store.keys.review(agreement.issueId));
   if (existing?.issueKey) {
@@ -259,6 +265,16 @@ export async function ensureReviewIssue(client, agreement, { reason = 'notice wi
     } catch (e) {
       if (!e.notFound) throw e;
     }
+  }
+  // App storage may be empty (reinstall): ask Jira for an open review
+  // linked to this agreement before creating one.
+  // (Skipped for an agreement created moments ago in this run: it cannot
+  // have a review yet, and judge mode's cold start stays fast.)
+  const linkedReviews = fresh ? [] : await findLinkedWithLabel(client, agreement.issueKey, LABELS.REVIEW).catch(() => []);
+  const openReview = linkedReviews.find((r) => r.statusCategory !== 'done');
+  if (openReview) {
+    await store.set(store.keys.review(agreement.issueId), { issueKey: openReview.key, at: new Date().toISOString(), adopted: true });
+    return { created: false, issueKey: openReview.key, url: browse(base, openReview.key) };
   }
   const cfg = await ensureConfig(client);
   const ev = evaluate(agreement, todayIso());
@@ -441,25 +457,103 @@ async function saveStamp(stamp) {
 
 // ---------- judge mode ----------
 
+export const AGREEMENT_PROP = 'fides-agreement';
+const PROP_FIELDS = ['vendor', 'endDate', 'noticeDays', 'milestoneDate', 'spend', 'owner', 'ownerAccountId', 'obligations', 'confluencePageId', 'confluenceUrl', 'sample', 'sampleKey'];
+const propertyRecord = (r) => Object.fromEntries([['v', 1], ...PROP_FIELDS.map((k) => [k, r[k] ?? null])]);
+
+// Rebuild an agreement record from its Jira issue: the issue property when
+// present, else the fixed-format description Fides writes, else the
+// sample definition. Used when app storage is empty (reinstall, or a second
+// product install with its own storage).
+export function recordFromIssue(issue, def = null) {
+  const prop = issue.properties?.[AGREEMENT_PROP];
+  const text = issue.descriptionText || '';
+  const grab = (re) => re.exec(text)?.[1]?.trim() ?? null;
+  const parsed = {
+    endDate: grab(/End date: (\d{4}-\d{2}-\d{2})\./),
+    noticeDays: grab(/Notice period: (\d+) days\./),
+    spend: grab(/Spend: (.*?)\. Owner:/),
+    owner: grab(/Owner: ([^\n]*?)\.\s*(?:\n|$)/),
+    obligations: grab(/Key obligations: ([^\n]*)/),
+    confluenceUrl: grab(/Contract page: (https?:\/\/\S+)/),
+  };
+  const base = prop || {};
+  const pick = (k) => base[k] ?? (parsed[k] && parsed[k] !== 'n/a' ? parsed[k] : null) ?? def?.[k] ?? null;
+  const vendor = base.vendor || def?.vendor || String(issue.summary || '').split(' agreement')[0];
+  const confluenceUrl = pick('confluenceUrl');
+  return {
+    vendor,
+    endDate: pick('endDate'),
+    noticeDays: Number(pick('noticeDays')),
+    milestoneDate: base.milestoneDate || null,
+    spend: pick('spend') || '',
+    owner: pick('owner') || '',
+    ownerAccountId: base.ownerAccountId || null,
+    ownerResolution: base.ownerAccountId ? 'picked' : 'none',
+    obligations: pick('obligations') || '',
+    confluencePageId: base.confluencePageId || jira.parsePageRef(confluenceUrl) || null,
+    confluenceUrl,
+    sample: true,
+    sampleKey: base.sampleKey || def?.sampleKey || null,
+    summary: issue.summary,
+    issueId: issue.id,
+    issueKey: issue.key,
+    projectId: issue.projectId,
+    projectKey: issue.projectKey,
+    rebuiltFromJira: true,
+  };
+}
+
+// The oldest live sample agreement issue for a sample key, if any.
+async function findSampleIssue(client, sampleKey) {
+  const found = await jira.searchIssues(
+    client,
+    `labels = "${sampleLabel(sampleKey)}" AND labels = "${LABELS.AGREEMENT}" ORDER BY created ASC`,
+    ['summary', 'labels', 'status', 'project', 'description', 'created'],
+    1,
+    [AGREEMENT_PROP]
+  );
+  return found[0] || null;
+}
+
+// Issues linked to an agreement that carry a label, oldest first.
+export async function findLinkedWithLabel(client, agreementKey, label) {
+  const issue = await jira.getIssue(client, agreementKey);
+  const keys = [...new Set(issue.links.map((l) => l.key).filter(Boolean))];
+  if (!keys.length) return [];
+  return jira.searchIssues(client, `key in (${keys.join(',')}) AND labels = "${label}" ORDER BY created ASC`, ['summary', 'status', 'labels'], 20);
+}
+
+// Jira is the single source of truth: reuse the sample issue if Jira has
+// one (rebuilding the app record from it), never create a second. Same for
+// the sample blocker (label + link). Creation only happens when Jira has
+// none; the caller holds the seed lock.
 async function ensureSample(client, s, cfg, space, base) {
-  const known = await store.get(store.keys.sample(s.sampleKey));
-  if (known?.issueId) {
-    const a = await store.get(store.keys.agreement(known.issueId));
-    if (a) return a;
-  }
-  // Jira-side guard in case KVS lost the sample key, run in parallel with
-  // the Confluence page lookup to keep first load fast.
   const title = samplePageTitle(s.vendor);
-  const [dup, existingPage] = await Promise.all([
-    jira.searchIssues(client, `labels = "${sampleLabel(s.sampleKey)}" AND labels = "${LABELS.AGREEMENT}"`, ['summary'], 1).catch(() => []),
+  const [existingIssue, existingPage] = await Promise.all([
+    findSampleIssue(client, s.sampleKey),
     space ? jira.findPageByTitle(client, space.id, title).catch(() => null) : null,
   ]);
-  if (dup[0]) {
-    const a = await store.get(store.keys.agreement(dup[0].id));
-    if (a) {
-      await store.set(store.keys.sample(s.sampleKey), { issueId: a.issueId });
-      return a;
+
+  if (existingIssue) {
+    const cached = await store.get(store.keys.agreement(existingIssue.id));
+    let agreement = cached || recordFromIssue(existingIssue, s);
+    if (!agreement.confluencePageId && existingPage?.id) {
+      // the page exists but this record never learnt it: the backfill links it later
     }
+    agreement = await store.saveAgreement(agreement);
+    await store.set(store.keys.sample(s.sampleKey), { issueId: agreement.issueId });
+    if (!cached) jira.setIssueProperty(client, agreement.issueKey, AGREEMENT_PROP, propertyRecord(agreement)).catch(() => {});
+    if (s.blocker) {
+      const blockers = await findLinkedWithLabel(client, agreement.issueKey, LABELS.BLOCKER).catch(() => null);
+      if (blockers === null) return agreement; // could not check: never create blind
+      if (blockers.length) {
+        if (agreement.sampleBlockerKey !== blockers[0].key) agreement = await store.saveAgreement({ ...agreement, sampleBlockerKey: blockers[0].key });
+        return agreement;
+      }
+      return createSampleBlocker(client, s, cfg, agreement);
+    }
+    return agreement;
   }
 
   let page = existingPage;
@@ -479,23 +573,25 @@ async function ensureSample(client, s, cfg, space, base) {
     { sample: true, sampleKey: s.sampleKey }
   );
   await store.set(store.keys.sample(s.sampleKey), { issueId: agreement.issueId });
+  const out = s.blocker ? await createSampleBlocker(client, s, cfg, agreement) : agreement;
+  out.justCreated = true; // in memory only, never stored
+  return out;
+}
 
-  if (s.blocker) {
-    const blocker = await jira.createIssue(client, {
-      projectId: cfg.projectId,
-      issueTypeId: cfg.issueTypeId,
-      summary: s.blocker.summary,
-      description: adf.doc(adf.p(s.blocker.description), adf.p(adf.em('Sample blocker created by Fides judge mode.'))),
-      labels: [LABELS.BLOCKER, LABELS.SAMPLE],
-    });
-    const types = await jira.linkTypeNames(client);
-    await jira.linkIssues(client, types.blocks, blocker.key, agreement.issueKey);
-    const { pending, ...record } = agreement;
-    const saved = { ...(await store.saveAgreement({ ...record, sampleBlockerKey: blocker.key })), pending };
-    saved.newBlocker = { id: blocker.id, key: blocker.key, summary: s.blocker.summary, statusCategory: 'new', statusName: 'To Do' };
-    return saved;
-  }
-  return agreement;
+async function createSampleBlocker(client, s, cfg, agreement) {
+  const blocker = await jira.createIssue(client, {
+    projectId: cfg.projectId,
+    issueTypeId: cfg.issueTypeId,
+    summary: s.blocker.summary,
+    description: adf.doc(adf.p(s.blocker.description), adf.p(adf.em('Sample blocker created by Fides judge mode.'))),
+    labels: [LABELS.BLOCKER, LABELS.SAMPLE, `${sampleLabel(s.sampleKey)}-blocker`],
+  });
+  const types = await jira.linkTypeNames(client);
+  await jira.linkIssues(client, types.blocks, blocker.key, agreement.issueKey);
+  const { pending, newBlocker: _nb, ...record } = agreement;
+  const saved = { ...(await store.saveAgreement({ ...record, sampleBlockerKey: blocker.key })), pending };
+  saved.newBlocker = { id: blocker.id, key: blocker.key, summary: s.blocker.summary, statusCategory: 'new', statusName: 'To Do' };
+  return saved;
 }
 
 // ---------- Confluence link backfill ----------
@@ -585,9 +681,19 @@ export async function hasRealData(client) {
 export async function judgeModeSeed(client, source, { force = false } = {}) {
   const t0 = Date.now();
   const state = await store.get(store.keys.seed);
-  if (state?.state === 'done' || (state?.state === 'skipped' && !force)) return { ...state, alreadyDone: true };
-  const won = await store.claim(store.keys.seedLock, { source, at: new Date().toISOString() }, 90);
+  // `force` (the explicit Load samples button) re-runs even after "done":
+  // seeding adopts whatever Jira already has, so re-running is safe.
+  if (!force && (state?.state === 'done' || state?.state === 'skipped')) return { ...state, alreadyDone: true };
+  // Concurrency guard: a short-lived lock (FAIL_IF_EXISTS, 60 s TTL), then a
+  // re-check of the seed state, then a Jira lookup per sample under the lock
+  // (ensureSample), so two runs that start together cannot both create.
+  const won = await store.claim(store.keys.seedLock, { source, at: new Date().toISOString() }, 60);
   if (!won) return { state: 'running' };
+  const recheck = await store.get(store.keys.seed);
+  if (!force && (recheck?.state === 'done' || recheck?.state === 'skipped')) {
+    await store.del(store.keys.seedLock).catch(() => {});
+    return { ...recheck, alreadyDone: true };
+  }
   try {
     await store.set(store.keys.seed, { state: 'running', at: new Date().toISOString(), source });
     // Independent discovery calls in parallel: they are the critical path.
@@ -639,7 +745,7 @@ export async function judgeModeSeed(client, source, { force = false } = {}) {
         })(),
         (async () => {
           try {
-            if ((await ensureReviewIssue(client, a, { reason: 'judge mode' })).created) stamp.reviewsCreated += 1;
+            if ((await ensureReviewIssue(client, a, { reason: 'judge mode', fresh: a.justCreated === true })).created) stamp.reviewsCreated += 1;
           } catch (e) {
             stamp.errors.push(`${a.issueKey}: ${e.message}`);
           }
@@ -663,6 +769,7 @@ export async function judgeModeSeed(client, source, { force = false } = {}) {
       return s;
     }
     const s = {
+      adopted: seeded.filter((a) => a.rebuiltFromJira || !a.justCreated).length,
       state: failed.length ? 'partial' : 'done',
       version: SAMPLE_VERSION,
       at: new Date().toISOString(),
