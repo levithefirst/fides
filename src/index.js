@@ -32,13 +32,13 @@ resolver.define('bootstrap', async ({ context }) => {
   const client = api.asUser();
   let seed = null;
   try {
-    seed = await svc.judgeModeSeed(client, 'board-open');
+    seed = await svc.judgeModeSeed(client, 'board-open', { writeClient: api.asApp() });
   } catch (e) {
     seed = { state: 'error', errors: [friendly(e)] };
   }
   // Link sample agreements to their Confluence pages if Confluence became
   // reachable after seeding. No API calls when everything is linked.
-  const backfill = await svc.backfillSamplePages(client, { source: 'board-open (jira)' }).catch((e) => {
+  const backfill = await svc.backfillSamplePages(client, { source: 'board-open (jira)', writeClient: api.asApp() }).catch((e) => {
     console.warn(`Fides board-open backfill failed: ${e.message}`);
     return { errors: [friendly(e)] };
   });
@@ -70,14 +70,18 @@ resolver.define('getBoard', async ({ context }) => safeBoard(api.asUser(), conte
 // Cheap KVS read: the last board this user saw, painted before anything else.
 resolver.define('getSnapshot', async ({ context }) => svc.getSnapshot(context?.accountId));
 
-resolver.define('backfill', async ({ context }) => {
+// Board background call. Reads as the signed-in user; the sample-page
+// rewrite (if one is due) is made by the app, which created those pages.
+export async function boardBackfill(context) {
   console.log(`Fides board backfill: product=${installProduct({}, context)}`);
-  const r = await svc.backfillSamplePages(api.asUser(), { source: 'board (jira)' }).catch((e) => {
+  const r = await svc.backfillSamplePages(api.asUser(), { source: 'board (jira)', writeClient: api.asApp() }).catch((e) => {
     console.warn(`Fides board backfill failed: ${e.message}`);
     return { linked: [], synced: [] };
   });
   return { linked: r.linked?.length || 0, synced: r.synced?.length || 0 };
-});
+}
+
+resolver.define('backfill', async ({ context }) => boardBackfill(context));
 
 resolver.define('logPaint', async ({ payload }) => svc.recordPaint(payload || {}));
 
@@ -103,7 +107,7 @@ resolver.define('loadSamples', async () => {
   // Explicit request from the board. Still idempotent: existing samples
   // are reused, never duplicated.
   try {
-    const r = await svc.judgeModeSeed(client, 'load-samples', { force: true });
+    const r = await svc.judgeModeSeed(client, 'load-samples', { force: true, writeClient: api.asApp() });
     return { ok: true, seed: r };
   } catch (e) {
     return { ok: false, error: friendly(e) };
@@ -138,7 +142,7 @@ resolver.define('runImport', async ({ payload }) => {
 });
 
 resolver.define('runScanNow', async () => {
-  const stamp = await svc.runScan(api.asUser(), 'manual (board)');
+  const stamp = await svc.runScan(api.asUser(), 'manual (board)', { writeClient: api.asApp() });
   return { ok: stamp.ok, lastRun: stamp };
 });
 
@@ -469,6 +473,7 @@ export async function trackAgreementFromPageAction(payload) {
       contextContentId: payload?.context?.confluence?.contentId || null,
       confirm: payload?.confirm === true || payload?.confirm === 'true',
       overrides,
+      writeClient: api.asApp(), // only used to bring a Fides sample page in step with Jira
     });
     return { ...r, disclaimer: DISCLAIMER };
   } catch (e) {

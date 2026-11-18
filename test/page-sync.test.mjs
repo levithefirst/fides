@@ -16,7 +16,8 @@ const fake = fakeKvs();
 let site;
 mock.module('@forge/kvs', { namedExports: fake });
 mock.module('@forge/api', {
-  defaultExport: { asApp: () => site.client, asUser: () => site.client },
+  // Tests may give the site distinct user and app clients; otherwise one client serves both.
+  defaultExport: { asApp: () => site.appClient ?? site.client, asUser: () => site.userClient ?? site.client },
   namedExports: { route: realApi.route },
 });
 mock.module('@forge/resolver', { defaultExport: class { define() {} getDefinitions() { return () => {}; } } });
@@ -64,7 +65,7 @@ test('sync from the Jira install: Confluence refused is logged clearly, cached f
   assert.equal(a.r.synced.length, 0);
   assert.equal(a.r.syncErrors.length, 4);
   assert.ok(a.lines.some((l) => /^LOG Fides page sync \(board \(jira\)\): start, 4 sample page/.test(l)), a.lines.join('\n'));
-  assert.ok(a.lines.some((l) => /^WARN Fides page sync \(board \(jira\)\): failed for [A-Z]+-\d+, page \d+: HTTP 403/.test(l)));
+  assert.ok(a.lines.some((l) => /^WARN Fides page sync \(board \(jira\)\): read failed for [A-Z]+-\d+, page \d+: HTTP 403/.test(l)));
   assert.ok(a.lines.some((l) => /every page failed, so Confluence calls look unavailable from this install; will retry after/.test(l)));
   // Second call: skipped, no Confluence calls at all.
   const calls = site.calls.length;
@@ -169,16 +170,107 @@ test('confirm true on the already-tracked stale sample page: nothing created, pa
   assert.equal(again.syncOffer, undefined);
 });
 
-test('confirm true when the user cannot edit the page: still existing, with a plain note', async () => {
-  const { page } = await liveState();
+test('confirm true when even the app write fails: plain note, no blame on the user, nothing else changes', async () => {
+  const { page, helios } = await liveState();
   const orig = site.client.requestConfluence;
   site.client.requestConfluence = (path, opts) =>
-    opts?.method === 'PUT' ? Promise.resolve({ status: 403, ok: false, statusText: '403', text: async () => '{"message":"No permission"}' }) : orig(path, opts);
-  const r = await actions.trackAgreementFromPageAction({ page: page.id, confirm: true });
+    opts?.method === 'PUT' ? Promise.resolve({ status: 404, ok: false, statusText: '404', text: async () => '{"message":"NOT_FOUND"}' }) : orig(path, opts);
+  const { r, lines } = await capture(() => actions.trackAgreementFromPageAction({ page: page.id, confirm: true }));
   site.client.requestConfluence = orig;
   assert.equal(r.status, 'existing');
+  assert.equal(r.agreement.issueKey, helios.key);
   assert.equal(r.pageSynced, 'failed');
-  assert.match(r.message, /could not be updated \(you may not have edit permission/);
+  assert.match(r.message, /Fides could not update the page dates \(HTTP 404\)\. The agreement in Jira is correct and unchanged\./);
+  assert.doesNotMatch(r.message, /permission|you may not/i, 'does not blame the user');
+  assert.ok(lines.some((l) => /^WARN Fides page sync \(rovo confirm\): app write failed for page \d+: HTTP 404/.test(l)), lines.join('\n'));
+  // A failed WRITE is not cached as "Confluence unreachable": the next sync still tries.
+  assert.equal(fake.kvs.data.has('cap:confluenceSyncFailed'), false);
+});
+
+// ---- the sample-page rewrite is made by the app client, reads stay with the user ----
+
+// A signed-in user who can read pages but not edit them (Confluence answers
+// 404 to their update), and the app, which created the sample pages.
+function splitClients() {
+  const log = [];
+  const wrap = (who, canEdit) => ({
+    requestJira: (p, o) => site.client.requestJira(p, o),
+    requestConfluence: (p, o) => {
+      const method = o?.method || 'GET';
+      const path = String(p.value ?? p);
+      log.push({ who, method, path });
+      if (method === 'PUT' && !canEdit) return Promise.resolve({ status: 404, ok: false, statusText: '404', text: async () => '{"message":"NOT_FOUND"}' });
+      return site.client.requestConfluence(p, o);
+    },
+  });
+  site.userClient = wrap('user', false);
+  site.appClient = wrap('app', true);
+  return log;
+}
+const puts = (log, who) => log.filter((l) => l.method === 'PUT' && l.who === who);
+
+test('Rovo confirm: the page update is made by the app client, so a read-only user succeeds; reads stay with the user', async () => {
+  const { page, liveEnd, helios } = await liveState();
+  const log = splitClients();
+  const { r } = await capture(() => actions.trackAgreementFromPageAction({ page: page.id, confirm: true, context: { confluence: { contentId: page.id } } }));
+  assert.equal(r.status, 'existing');
+  assert.equal(r.pageSynced, 'updated');
+  assert.match(r.message, /The page dates were updated to match Jira\./);
+  assert.doesNotMatch(r.message, /permission|could not/i);
+  assert.equal(puts(log, 'app').length, 1, 'the app made the update');
+  assert.equal(puts(log, 'user').length, 0, 'the user never attempted a write');
+  assert.equal(log.filter((l) => l.who === 'app' && l.method === 'GET').length, 0, 'reads stay with the user client');
+  assert.ok(log.some((l) => l.who === 'user' && l.method === 'GET' && l.path.includes(`/pages/${page.id}`)));
+  assert.equal(site.pages.get(page.id).version, 2);
+  assert.ok(site.pages.get(page.id).storage.includes(`<td>${liveEnd}</td>`));
+  assert.equal(String(helios.properties['fides-agreement'].confluencePageId), String(page.id));
+});
+
+test('board backfill path: reads as the user, rewrites sample pages as the app', async () => {
+  const { page, liveEnd } = await liveState();
+  const log = splitClients();
+  const { r, lines } = await capture(() => actions.boardBackfill({ installContext: 'ari:cloud:jira::site/1' }));
+  assert.equal(r.synced, 4);
+  assert.equal(puts(log, 'app').length, 4);
+  assert.equal(puts(log, 'user').length, 0);
+  assert.ok(lines.some((l) => /done, updated=4 inSync=0 failed=0/.test(l)));
+  assert.ok(site.pages.get(page.id).storage.includes(`<td>${liveEnd}</td>`));
+  // Second board open: in sync, no write at all.
+  const before = log.length;
+  await actions.boardBackfill({});
+  assert.equal(puts(log.slice(before), 'app').length, 0);
+});
+
+test('seeding and the manual scan also rewrite sample pages with the app client', async () => {
+  const { page } = await liveState();
+  const log = splitClients();
+  // The Confluence-side marker is per install; clear it so the scan syncs again.
+  await svc.runScan(site.userClient, 'manual (board)', { writeClient: site.appClient });
+  assert.equal(puts(log, 'user').length, 0);
+  assert.equal(puts(log, 'app').length >= 1, true);
+  assert.equal(site.pages.get(page.id).version, 2);
+});
+
+test('guard: only Fides sample pages are ever written, never with the app client otherwise', async () => {
+  await liveState();
+  const log = splitClients();
+  const real = site.addPage({ title: 'Real contract', storage: '<p>keep me</p>' });
+  // A real (non-sample) agreement pointing at a real page.
+  const a = { sample: false, confluencePageId: real, endDate: '2030-01-01', noticeDays: 30 };
+  assert.equal(await svc.syncSamplePage(site.userClient, a, { writeClient: site.appClient }), 'skipped');
+  // A sample agreement whose linked page is not a "Fides sample contract" page.
+  const b = { sample: true, confluencePageId: real, endDate: '2030-01-01', noticeDays: 30 };
+  assert.equal(await svc.syncSamplePage(site.userClient, b, { writeClient: site.appClient }), 'not-a-sample-page');
+  assert.equal(puts(log, 'app').length + puts(log, 'user').length, 0, 'no writes');
+  assert.equal(site.pages.get(real).storage, '<p>keep me</p>');
+  // The confirm path on a non-sample page tracked as a real agreement: no page write.
+  const id = site.addPage({ title: 'Acme Widgets Agreement', storage: "<p>The Initial Term expires on 31 December 2027.</p><p>Either party may terminate by giving thirty (30) days' written notice.</p>" });
+  const c = await actions.trackAgreementFromPageAction({ page: id, confirm: true });
+  assert.equal(c.status, 'created');
+  const again = await actions.trackAgreementFromPageAction({ page: id, confirm: true });
+  assert.equal(again.status, 'existing');
+  assert.equal(again.pageStale, false);
+  assert.equal(puts(log, 'app').length, 0, 'the app never rewrites a real contract page');
 });
 
 test('manifest: the check action is GET (no confirmation card), the write action is CREATE, both on the agent', async () => {
