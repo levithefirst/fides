@@ -99,6 +99,24 @@ resolver.define('createAgreement', async ({ payload }) => {
   }
 });
 
+resolver.define('previewImport', async ({ payload }) => {
+  try {
+    return await svc.previewImport(payload?.text || '');
+  } catch (e) {
+    return { ok: false, error: friendly(e), rows: [] };
+  }
+});
+
+// The board sends the paste in slices (10 rows per call) so each call
+// stays well inside the resolver time limit.
+resolver.define('runImport', async ({ payload }) => {
+  try {
+    return await svc.importAgreements(api.asUser(), payload?.text || '', { from: payload?.from || 0, to: payload?.to || 10 });
+  } catch (e) {
+    return { ok: false, error: friendly(e), results: [] };
+  }
+});
+
 resolver.define('runScanNow', async () => {
   const stamp = await svc.runScan(api.asUser(), 'manual (board)');
   return { ok: stamp.ok, lastRun: stamp };

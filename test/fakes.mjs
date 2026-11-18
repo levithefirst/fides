@@ -58,7 +58,7 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
   let nextPage = 900001;
   const base = 'https://example-site.atlassian.net';
   // Toggles for clean-site permission states.
-  const state = { confluence, canCreate: true, createmetaEmpty: false, canBrowse: true };
+  const state = { confluence, canCreate: true, createmetaEmpty: false, canBrowse: true, failCreateFor: null };
 
   const json = (status, body) => ({
     status,
@@ -93,6 +93,8 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
         return json(200, { issueTypes: [{ id: '3', name: 'Epic', hierarchyLevel: 1 }, { id: '1', name: 'Task', hierarchyLevel: 0, subtask: false }] });
       if (p === '/rest/api/3/issue' && method === 'POST' && !state.canCreate)
         return json(400, { errors: { project: 'You do not have permission to create issues in this project.' } });
+      if (p === '/rest/api/3/issue' && method === 'POST' && state.failCreateFor && state.failCreateFor.test(body.fields.summary))
+        return json(500, { errorMessages: ['Internal server error'] });
       if (p === '/rest/api/3/issue' && method === 'POST') {
         const id = String(nextIssue++);
         const proj = projects.find((x) => x.id === body.fields.project.id);

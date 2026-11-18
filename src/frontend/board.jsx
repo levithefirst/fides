@@ -144,6 +144,133 @@ function AgreementTable({ items, base, escalatedIds, onReview, onLinkPage, busy 
   return <DynamicTable head={HEAD} rows={rows} label="Agreements" />;
 }
 
+const IMPORT_HELP =
+  'Paste rows from a spreadsheet with a header row: vendor, end date (YYYY-MM-DD or DD/MM/YYYY), notice days, owner, and an optional Confluence page link. Up to 100 rows.';
+const IMPORT_HEAD = {
+  cells: [
+    { key: 'line', content: 'Row' },
+    { key: 'vendor', content: 'Vendor' },
+    { key: 'end', content: 'End date' },
+    { key: 'notice', content: 'Notice days' },
+    { key: 'owner', content: 'Owner' },
+    { key: 'check', content: 'Check' },
+  ],
+};
+
+function ImportAgreements({ onClose, onDone }) {
+  const [text, setText] = useState('');
+  const [preview, setPreview] = useState(null);
+  const [results, setResults] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const doPreview = async () => {
+    setBusy(true);
+    setErr(null);
+    const r = await invoke('previewImport', { text });
+    setBusy(false);
+    if (!r.ok) setErr(r.error);
+    setPreview(r.ok ? r : null);
+  };
+  const doImport = async () => {
+    setBusy(true);
+    const all = [];
+    for (let from = 0; from < preview.rows.length; from += 10) {
+      const r = await invoke('runImport', { text, from, to: from + 10 });
+      if (!r.ok) {
+        setErr(r.error);
+        break;
+      }
+      all.push(...r.results);
+      setResults([...all]);
+    }
+    setBusy(false);
+    onDone();
+  };
+
+  const check = (r) =>
+    r.errors.length ? `Error: ${r.errors.join(' ')}` : r.duplicate ? `Skip: ${r.duplicate}` : 'Ready';
+  const counts = (st) => (results || []).filter((x) => x.status === st).length;
+
+  return (
+    <Modal onClose={onClose} width="x-large">
+      <ModalHeader>
+        <ModalTitle>Import agreements</ModalTitle>
+      </ModalHeader>
+      <ModalBody>
+        <Stack space="space.150">
+          <Text color="color.text.subtle">{IMPORT_HELP}</Text>
+          {err ? <SectionMessage appearance="error"><Text>{err}</Text></SectionMessage> : null}
+          {!results ? (
+            <>
+              <Label labelFor="import-rows">Rows to import</Label>
+              <TextArea id="import-rows" value={text} onChange={(e) => { setText(e.target.value); setPreview(null); }} />
+            </>
+          ) : null}
+          {preview && !results ? (
+            <Stack space="space.100">
+              <Text weight="medium">{`${preview.counts.valid} ready, ${preview.counts.duplicates} duplicate, ${preview.counts.invalid} with errors. Nothing is created until you confirm.`}</Text>
+              <DynamicTable
+                head={IMPORT_HEAD}
+                rowsPerPage={20}
+                rows={preview.rows.map((r) => ({
+                  key: String(r.line),
+                  cells: [
+                    { key: 'line', content: <Text>{String(r.line)}</Text> },
+                    { key: 'vendor', content: <Text>{r.vendor || ' '}</Text> },
+                    { key: 'end', content: <Text>{r.endDate || r.endDateRaw || ' '}</Text> },
+                    { key: 'notice', content: <Text>{r.noticeDaysRaw || ' '}</Text> },
+                    { key: 'owner', content: <Text>{r.owner || ' '}</Text> },
+                    { key: 'check', content: <Text color={r.errors.length ? 'color.text.danger' : 'color.text'}>{check(r)}</Text> },
+                  ],
+                }))}
+              />
+            </Stack>
+          ) : null}
+          {results ? (
+            <Stack space="space.100">
+              <Text weight="medium">{`${counts('created')} created, ${counts('skipped')} skipped, ${counts('failed')} failed.`}</Text>
+              <DynamicTable
+                head={{ cells: [{ key: 'line', content: 'Row' }, { key: 'vendor', content: 'Vendor' }, { key: 'result', content: 'Result' }] }}
+                rowsPerPage={20}
+                rows={results.map((r) => ({
+                  key: String(r.line),
+                  cells: [
+                    { key: 'line', content: <Text>{String(r.line)}</Text> },
+                    { key: 'vendor', content: <Text>{r.vendor || ' '}</Text> },
+                    {
+                      key: 'result',
+                      content: (
+                        <Text color={r.status === 'failed' ? 'color.text.danger' : 'color.text'}>
+                          {r.status === 'created' ? `Created ${r.issueKey}` : r.status === 'skipped' ? `Skipped: ${r.reason}` : `Failed: ${r.reason}`}
+                        </Text>
+                      ),
+                    },
+                  ],
+                }))}
+              />
+            </Stack>
+          ) : null}
+        </Stack>
+      </ModalBody>
+      <ModalFooter>
+        <ButtonGroup>
+          <Button appearance="subtle" onClick={onClose}>{results ? 'Close' : 'Cancel'}</Button>
+          {!results ? (
+            preview ? (
+              <Button appearance="primary" isDisabled={busy || !preview.counts.valid} onClick={doImport}>
+                {`Import ${preview.counts.valid} agreement${preview.counts.valid === 1 ? '' : 's'}`}
+              </Button>
+            ) : (
+              <Button appearance="primary" isDisabled={busy || !text.trim()} onClick={doPreview}>Preview</Button>
+            )
+          ) : null}
+        </ButtonGroup>
+      </ModalFooter>
+    </Modal>
+  );
+}
+
 function AddAgreement({ onClose, onSaved }) {
   const [f, setF] = useState({ vendor: '', endDate: '', noticeDays: '30', spend: '', owner: '', obligations: '', confluenceUrl: '' });
   const [err, setErr] = useState(null);
@@ -425,6 +552,7 @@ function Board() {
           </Stack>
           <ButtonGroup>
             <Button onClick={() => setModal({ kind: 'add' })}>Add agreement</Button>
+            <Button onClick={() => setModal({ kind: 'import' })}>Import agreements</Button>
             <Button onClick={runScan} isDisabled={busy || seeding}>Run scan now</Button>
           </ButtonGroup>
         </Inline>
@@ -499,6 +627,7 @@ function Board() {
         {modal?.kind === 'add' ? (
           <AddAgreement onClose={() => setModal(null)} onSaved={() => { setModal(null); refresh(); }} />
         ) : null}
+        {modal?.kind === 'import' ? <ImportAgreements onClose={() => setModal(null)} onDone={refresh} /> : null}
         {modal?.kind === 'link' ? (
           <LinkPage agreement={modal.agreement} onClose={() => setModal(null)} onSaved={() => { setModal(null); refresh(); }} />
         ) : null}

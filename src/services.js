@@ -19,6 +19,7 @@ import { buildSamples, samplePageTitle, samplePageBody, SAMPLE_VERSION } from '.
 import { DISCLAIMER } from './lib/brief.js';
 import { matchAgreement } from './lib/match.js';
 import { extractAgreement } from './lib/extract.js';
+import { parseImport, dupKey, MAX_ROWS } from './lib/importRows.js';
 import { storageToText } from './lib/brief.js';
 
 const sampleLabel = (k) => `fides-sample-${k}`;
@@ -654,6 +655,55 @@ export async function boardData(client, { asUser }) {
     },
     disclaimer: DISCLAIMER,
   };
+}
+
+// ---------- paste-rows import ----------
+
+export async function previewImport(text) {
+  return parseImport(text, await store.listAgreements());
+}
+
+// Import rows [from, to) of a paste, through the same createAgreement path
+// as the board's Add agreement form. Re-parses on the server; never trusts
+// a client-side preview. Batches of 5 in parallel; each row reports
+// created, skipped or failed.
+export async function importAgreements(client, text, { from = 0, to = MAX_ROWS, batchSize = 5 } = {}) {
+  const parsed = parseImport(text, await store.listAgreements());
+  if (!parsed.ok) return { ok: false, error: parsed.error, results: [] };
+  const slice = parsed.rows.slice(from, Math.min(to, MAX_ROWS));
+  const results = [];
+  const createdKeys = new Set();
+  for (let i = 0; i < slice.length; i += batchSize) {
+    const batch = slice.slice(i, i + batchSize);
+    const out = await Promise.all(
+      batch.map(async (r) => {
+        const base = { line: r.line, vendor: r.vendor, endDate: r.endDate };
+        if (r.errors.length) return { ...base, status: 'failed', reason: r.errors.join(' ') };
+        if (r.duplicate) return { ...base, status: 'skipped', reason: r.duplicate };
+        const k = dupKey(r.vendor, r.endDate);
+        if (createdKeys.has(k)) return { ...base, status: 'skipped', reason: 'Repeated earlier in this paste.' };
+        createdKeys.add(k);
+        try {
+          const a = await createAgreement(client, {
+            vendor: r.vendor,
+            endDate: r.endDate,
+            noticeDays: r.noticeDays,
+            owner: r.owner,
+            confluenceUrl: r.confluenceUrl,
+            confluencePageId: jira.parsePageRef(r.confluenceUrl),
+          });
+          return { ...base, status: 'created', issueKey: a.issueKey, ownerResolution: a.ownerResolution || null };
+        } catch (e) {
+          createdKeys.delete(k);
+          const msg = e instanceof ApiError && e.permissionDenied ? 'You do not have permission to create issues in the Fides project.' : e.message;
+          return { ...base, status: 'failed', reason: msg };
+        }
+      })
+    );
+    results.push(...out);
+  }
+  const count = (st) => results.filter((x) => x.status === st).length;
+  return { ok: true, results, counts: { created: count('created'), skipped: count('skipped'), failed: count('failed') }, total: parsed.rows.length };
 }
 
 // ---------- track an agreement from its Confluence page ----------
