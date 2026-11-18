@@ -115,10 +115,10 @@ test('agent prompt and manifest: chained ask uses only the four existing actions
   const order = ['list-upcoming-notices', 'escalate-threatened-milestones', 'draft-brief'].map((k) => prompt.indexOf(k, prompt.indexOf('E. "Is')));
   assert.ok(order.every((i) => i > 0) && order[0] < order[1] && order[1] < order[2], 'chain order: list, escalate, brief');
   const referenced = new Set(prompt.match(/\b[a-z]+(?:-[a-z]+){1,3}\b/g).filter((w) => /notices|issue|milestones|brief/.test(w)));
-  const allowed = new Set(['list-upcoming-notices', 'create-review-issue', 'escalate-threatened-milestones', 'draft-brief']);
+  const allowed = new Set(['list-upcoming-notices', 'create-review-issue', 'escalate-threatened-milestones', 'draft-brief', 'track-agreement-from-page']);
   for (const k of referenced) assert.ok(allowed.has(k), `unknown action referenced: ${k}`);
   assert.match(prompt, /Fides tracks dates and obligations; it is not legal advice\./);
-  assert.doesNotMatch(prompt.replace('Never call blockers RFIs.', ''), /\bRFI/);
+  assert.doesNotMatch(prompt, /\bRFI/);
   assert.doesNotMatch(prompt + manifest, /\u2014/);
 });
 

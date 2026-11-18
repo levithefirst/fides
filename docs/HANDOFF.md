@@ -141,6 +141,17 @@ Record the result of A (script output and stopwatch time) in the README acceptan
 3. Ask "Draft a renew or cancel brief for Helios Payroll." The brief must contain "Source: Fides sample contract: Helios Payroll (link)" with a working link to the page in Confluence.
 4. As a user without access to that Confluence space, ask again. The brief must say the page could not be read because of permissions, and must not quote clause text.
 
+### 8G. Six-item batch checks (track from page, import, owner notify, fast paint, edge states, copy)
+
+Deploy note: **no scope change** in this batch, so `forge deploy` is enough; existing Sharing installs pick it up without an upgrade. Optional later: adding `read:jira-user` lets owner emails and names resolve to accounts; that one change needs `forge deploy` then `forge install --upgrade`, and each existing install must accept the upgrade.
+
+1. Track from page: on a Confluence contract page, ask Rovo "Track this contract". It must show a proposal with a quoted source per field and nothing in Jira yet; after "yes", one new agreement with a "Contract page" link. Asking again says it is already tracked. On "Fides sample contract: Helios Payroll" it must say already tracked.
+2. Import: paste three rows (one duplicate of a sample, one bad date). Preview shows the error and the duplicate; import reports 1 created, 1 skipped, 1 failed.
+3. Owner notify: add an agreement with an owner picked in the user picker, due within 14 days, with a linked `fides-blocker` issue; run the scan. The escalation and review issues are assigned to that owner, who is also a watcher, and the board row says "Owner notified via Jira".
+4. Fast paint: open the board twice. The second open paints immediately with "Updated ... ago, refreshing", then the text disappears. The Forge logs show "Fides first useful paint: N ms from snapshot" (target under 3000 warm, under 10000 cold).
+5. Edge states: as a user with Browse but not Create issues in the Fides project, the board shows "You can view agreements but cannot create issues in <KEY>." with a next step, and the create buttons are disabled.
+6. Copy: `node scripts/copy-lint.mjs` prints "copy lint: clean" (it also runs in `npm test`).
+
 ### 9. Pre-flight the full acceptance list on the demo site
 
 From the README: samples on the current site with no hardcoded IDs, board with three labelled statuses and shapes plus 30/60/90 grouping, last-scan status and footer, issue panel on agreement and escalation issues, all **four** Rovo actions (list, create review, escalate, draft brief), daily scan wired (wait for the first scheduled run about five minutes after deploy and check the last-scan source reads `scheduledTrigger`), no secrets in git (`git grep -nI -e token -e password`).

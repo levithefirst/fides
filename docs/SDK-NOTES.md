@@ -26,7 +26,7 @@ Verified against live Atlassian developer docs on **14 Nov 2026**. Where the bui
 | `scheduledTrigger` | `fides-daily-scan` | `interval: day`. |
 | `trigger` | `fides-on-install` | Event `avi:forge:installed:app` (live life cycle events page). Runs judge-mode seeding with `api.asApp()`. |
 | `rovo:agent` | `fides-agent` | Name `Fides` (limit 30 characters). Prompt is a resource file (`resource:static;agent/prompt.txt`, needs CLI 10.6.0+). Icon, description, four conversation starters, four actions. |
-| `action` | `list-upcoming-notices`, `create-review-issue`, `escalate-threatened-milestones`, `draft-brief` | `actionVerb` values from the live action page: `GET`, `CREATE`, `UPDATE`, `DELETE`, `TRIGGER`. Fides uses `GET` (list, brief) and `CREATE` (review, escalate). Every action declares `inputs` (mandatory) with `title`, `type`, `required`, `description`. |
+| `action` | `list-upcoming-notices`, `create-review-issue`, `escalate-threatened-milestones`, `draft-brief`, `track-agreement-from-page` | `actionVerb` values from the live action page: `GET`, `CREATE`, `UPDATE`, `DELETE`, `TRIGGER`. Fides uses `GET` (list, brief) and `CREATE` (review, escalate, track). The schema caps an action `description` at 255 characters (offline validator finding). Every action declares `inputs` (mandatory) with `title`, `type`, `required`, `description`. |
 | `function` | 7 handlers | `timeoutSeconds` is set only on the scheduled scan (300); the live scheduled trigger page allows 1 to 900 seconds for scheduled and async functions. `forge lint` rejected it on the `on-install` (product trigger) function, so it was removed there (live finding, commit cf6fa02). |
 
 Not used: `jira:projectPage` (optional in the brief; the global page already filters to agreements you can see), `jira:issueContext`, `rovo:mcp`, `rovo:agentConnector`, `graph:connector`, Teamwork Graph. Not invented: `jira:globalSidebar` (the offline validator rejects it, which is a good test that validation is real).
@@ -73,6 +73,10 @@ Jira Cloud REST v3 (`api.asUser().requestJira` / `api.asApp().requestJira`):
 | Link issues | `POST /rest/api/3/issueLink` |
 | Link the Confluence page | `POST /rest/api/3/issue/{key}/remotelink` |
 | Ping a review issue | `POST /rest/api/3/issue/{key}/comment` |
+| Assign on create | `assignee: { id }` in `POST /rest/api/3/issue` (retried without it if Jira rejects the assignee) |
+| Add the owner as a watcher | `POST /rest/api/3/issue/{key}/watchers` (body: the account id as a JSON string) |
+| What the user may do (read-only board) | `GET /rest/api/3/mypermissions?projectKey=&permissions=CREATE_ISSUES,BROWSE_PROJECTS,ADMINISTER` (classic scope `read:jira-work`, confirmed on the live permissions page) |
+| Owner email or name to account (optional) | `GET /rest/api/3/user/search` needs `read:jira-user` (confirmed on the live user search page). **Not requested.** Calls fail with 401/403 and Fides falls back; the refusal is cached for a day. |
 
 Confluence Cloud REST v2 (`requestConfluence`):
 

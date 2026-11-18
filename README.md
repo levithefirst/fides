@@ -25,7 +25,7 @@ Codegeist 2026 · Track: **Apps for Business Teams** · Bonus: **Best Agents** (
 
 Not a CLM, not a contract-approval router, not a jargon translator, not a budget dashboard. No document upload or PDF extraction. Spend is shown for context only.
 
-## Rovo agent: one real question, four actions
+## Rovo agent: one real question, five actions
 
 Ask Fides **"Is Helios at risk, and what should I do?"** (a conversation starter, and the first button on the board). As the current user, the agent chains the existing actions on its own:
 
@@ -44,6 +44,8 @@ The board's **Ask Fides in Rovo** panel, directly under the Due spotlight, opens
 | `escalate-threatened-milestones` | `CREATE` | Applies the escalation rule to one or all agreements. Idempotent: reports existing escalations instead of duplicating them. |
 | `draft-brief` | `GET` | Gathers a hedged renew / cancel / renegotiate brief: timing, open blockers, options, what a missed notice could mean, and quoted excerpts from the linked Confluence page read **as the user**. It cites its source ("Source: Fides sample contract: Helios Payroll (link)"); if the page cannot be read, the source line says so explicitly and why. |
 
+| `track-agreement-from-page` | `CREATE` | "Track this contract" or "add Helios from its page": reads the Confluence page **as the user** and proposes vendor, end date, notice period, owner and up to 3 obligations, each with the quoted sentence it came from and a confidence. Parsing is deterministic (tables, date formats, "30 days' written notice", "notice of 60 days"); the agent fills gaps from its own reading. Nothing is created until the user confirms. One agreement per page: asking again returns the existing one. An unreadable page gets "I cannot read this page". |
+
 Agreements are resolved **by name first** (exact, then contained, then fuzzy with a one-letter typo allowed), and by issue key only as a fallback, so a nearby or guessed key never wins over the vendor the user named. Ambiguous names return the candidates instead of a guess, and every reply confirms the resolved key, for example "Resolved "Northwind Analytics" to CLSD-9 Northwind Analytics (matched by exact name)."
 
 The agent prompt (`static/agent/prompt.txt`) tells it to use only action data, hedge every statement, use the word "blocker" for open questions, approvals and deliverables, and end decision answers with the not-legal-advice line.
@@ -52,10 +54,10 @@ The agent prompt (`static/agent/prompt.txt`) tells it to use only action data, h
 
 | Criterion (20% each) | How Fides meets it | Atlassian features used |
 | --- | --- | --- |
-| **Technological Implementation** | A real loop, not a single demo path: structured agreements, a shared status rule used by the board, scan and agent, idempotent escalation (KVS `FAIL_IF_EXISTS` claims plus Jira label guards), install-time and first-open seeding with a lock, permission-aware reads via bulk fetch, 60 tests in CI. | **Forge modules**: `jira:globalPage`, `jira:issuePanel`, `scheduledTrigger` (interval `day`, `api.asApp()`), `trigger` on `avi:forge:installed:app`, Key-Value Store (`@forge/kvs`). **Jira issues and links**: agreements, blockers, review and escalation issues, issue links, remote links. |
-| **Design** | Native UI Kit, ADS tokens, light and dark themes, colourblind-safe chips (shape plus label), 30/60/90 grouping, last-scan status, recoverable empty and error states, one Fides Umber accent. Judge mode means the first screen already shows the product working. | UI Kit (`render: native`), ADS tokens, Rovo bridge `rovo.open` from the board. |
-| **Potential Impact** | Missed notice periods and auto-renewals are a named value-leakage bucket (see Evidence). Fides puts the date, the obligation and the blocker in the tools these teams already use, and acts before the window closes. | **Jira issues** as the system of record, **Confluence contract pages** as the source of terms. |
-| **Innovation / Idea** | Connects contract dates to live work: an open blocker issue threatening a notice date triggers a hedged escalation automatically and through the agent. | **Rovo agent + actions**: `rovo:agent` with four `action` modules (`GET`, `CREATE`). **Confluence**: contract pages read as the user for the brief. |
+| **Technological Implementation** | A real loop, not a single demo path: structured agreements, a shared status rule used by the board, scan and agent, idempotent escalation (KVS `FAIL_IF_EXISTS` claims plus Jira label guards), install-time and first-open seeding with a lock, permission-aware reads via bulk fetch, a deterministic contract-page parser, a validated 100-row import through the same create path as the form, owner notification with a three-step fallback, and a per-user snapshot for fast first paint. 97 tests in CI. | **Forge modules**: `jira:globalPage`, `jira:issuePanel`, `scheduledTrigger` (interval `day`, `api.asApp()`), `trigger` on `avi:forge:installed:app`, Key-Value Store (`@forge/kvs`). **Jira issues and links**: agreements, blockers, review and escalation issues, issue links, remote links. |
+| **Design** | Native UI Kit, ADS tokens, light and dark themes, colourblind-safe chips (shape plus label), 30/60/90 grouping, last-scan status, one Fides Umber accent. Every edge state is one plain sentence and one next step. The board paints from a cached snapshot ("Updated 4m ago, refreshing") and swaps in fresh data without a layout jump. Import shows a preview with per-row errors before anything is created. | UI Kit (`render: native`, `UserPicker`, `DynamicTable`), ADS tokens, Rovo bridge `rovo.open` from the board. |
+| **Potential Impact** | Missed notice periods and auto-renewals are a named cause of value leakage (see Evidence). Fides puts the date, the obligation and the blocker in the tools these teams already use, and acts before the window closes. Teams get started fast: paste their existing spreadsheet, or track a contract straight from its Confluence page. The owner hears about it through Jira itself: review and escalation issues are assigned to them and they are added as a watcher. | **Jira issues** as the system of record (assignee and watchers drive Jira's own notifications), **Confluence contract pages** as the source of terms. |
+| **Innovation / Idea** | Connects contract dates to live work: an open blocker issue threatening a notice date triggers a hedged escalation automatically and through the agent. The agent can also turn a contract page into a tracked agreement, quoting each clause it relied on. | **Rovo agent + actions**: `rovo:agent` with five `action` modules (`GET`, `CREATE`). **Confluence**: contract pages read as the user for the brief and for track-from-page. |
 | **Presentation** | Zero-setup judge mode: install, open the board, see Due / Upcoming / On track and the escalation within 10 seconds. The demo script walks the full loop in under 5 minutes. | `trigger` (install), `jira:globalPage`, **`scheduledTrigger` with `api.asApp()`** shown via the last-scan line, Rovo Chat. |
 
 ## What the first screen shows
@@ -68,14 +70,36 @@ On a cold site the board never shows a silent spinner: it reads what exists, sho
 
 Clean-site states, each with a clear message:
 
-| Situation | What you see |
-| --- | --- |
-| No Rovo Chat on the site | Board, review issues and escalation work; Ask buttons are disabled with "Rovo Chat is needed for the Fides agent." |
-| No Confluence | Agreements and escalation seed; cards offer **Link a page** and a note explains why |
-| User cannot create issues | "Fides cannot create issues for you" with what permission to ask for; never a blank board |
-| User cannot read the agreement issues | "You do not have permission to read the Fides agreement issues in Jira." |
-| No Jira project at all | "Create a project (any template), then reload this page." |
-| Projects exist but none could be picked automatically | Project picker (only in this case) |
+| Situation | One sentence | Next step |
+| --- | --- | --- |
+| No Rovo Chat on the site | "Rovo Chat is not available on this site." Board, scan and escalations keep working; Ask buttons are disabled. | Ask a site admin to turn on Rovo. |
+| No Confluence, or a page you cannot read | "Fides cannot read Confluence contract pages here yet." / "I cannot read this page." | Connect Fides to Confluence, or use **Link a page**. |
+| Non-admin user | Board works normally with your permissions. | Admin-only choices (picking the project) become "Ask a Jira admin to ...". |
+| No Create issues in the Fides project | "You can view agreements but cannot create issues in OPS." Board is read-only. | Ask a Jira admin for the Create issues permission in OPS. |
+| Cannot create issues anywhere (fresh site) | "Fides cannot create issues for you on this site." | Ask a Jira admin for Create issues in one project. |
+| Cannot read the agreement issues | "You do not have permission to read the Fides agreement issues in Jira." | Ask a Jira admin for Browse projects permission. |
+| Zero agreements | "No agreements are tracked yet." | Load the samples, import rows, or add your first agreement. |
+| No Jira project at all | "There is no Jira project you can use on this site yet." | Create a project, then reload. |
+
+## Getting agreements in
+
+- **Import agreements** (board): paste rows from a spreadsheet, tab or comma separated, with a header row: vendor, end date (YYYY-MM-DD or DD/MM/YYYY), notice days, owner, optional Confluence page link. A preview shows per-row errors and duplicates (same vendor and end date) before anything is created; then each row reports created, skipped or failed. Up to 100 rows per paste.
+- **Track from a page** (Rovo): "Track this contract" on a Confluence contract page, confirm the proposal, done.
+- **Add agreement** (board): a form with a Jira user picker for the owner.
+
+## Owners hear about it in Jira
+
+When Fides opens a review or escalation issue, it assigns the issue to the agreement's owner and adds the owner as a watcher, so Jira's own notifications reach them. Fides sends no email of its own. The owner is resolved once, when the agreement is saved:
+
+1. The owner picked in the form, or an Atlassian account id in the import's owner column.
+2. Otherwise the agreement issue's assignee.
+3. Otherwise unassigned, and the board says so with a next step.
+
+If Jira refuses the assignee, the issue is still created and a clear warning is logged. Escalation rows show **Owner notified via Jira**. Turning an owner's email or name into an account needs Jira user search, which needs the `read:jira-user` scope; Fides does not request it, so emails and names fall back to step 2. Adding that scope later is a one-line manifest change plus an upgrade.
+
+## Fast first paint
+
+The board paints from your own last snapshot (one storage read, no Jira calls), Due spotlight first, with "Updated Xm ago, refreshing" in the header, then swaps in fresh data without moving the layout. Snapshots are per user, so a cached paint never shows an issue you cannot open. On a brand-new install there is no snapshot: the seeding progress shows and rows appear as soon as they exist. Each open logs "Fides first useful paint: N ms" in the Forge logs. Targets: under 3 s warm, under 10 s cold.
 
 ## Judge setup (fresh site, zero manual steps)
 
@@ -89,6 +113,8 @@ Clean-site states, each with a clear message:
    - a review issue for the Due agreement.
 4. The board shows all of this, plus the escalation message, within about 10 seconds.
 5. Click **Is Helios at risk, and what should I do?** under the spotlight, or open Rovo Chat, choose **Fides** and pick that conversation starter.
+6. Open the sample contract page for Northwind Analytics in Confluence, open Rovo there and say "Track this contract". Fides says it is already tracked (one agreement per page). Try it on any other contract page to see a proposal with quoted sources.
+7. Click **Import agreements**, paste two rows from a spreadsheet, preview, import.
 
 Notes:
 
@@ -105,7 +131,8 @@ Requires **Node 22.x (22.23.4 or later) or 24.x (24.22.1 or later)**, per the li
 ```bash
 npm install -g @forge/cli@latest
 npm ci
-npm test                    # 60 unit and integration tests
+npm test                    # 97 unit and integration tests
+node scripts/copy-lint.mjs  # copy rules (also runs in npm test)
 npm run validate:manifest   # offline schema check with @forge/manifest
 ```
 
@@ -135,6 +162,8 @@ src/
   lib/atlassian.js    Documented Jira REST v3 and Confluence REST v2 calls
   lib/store.js        KVS layout and claims
   lib/match.js        Name-first agreement matching for Rovo actions
+  lib/extract.js      Deterministic contract-page parsing for track-from-page
+  lib/importRows.js   Paste-rows import parsing and validation
   lib/view.js         Pure board view model: seeding, spotlight and clean-site states
   frontend/board.jsx  Notice board (jira:globalPage, UI Kit)
   frontend/panel.jsx  Issue panel (jira:issuePanel, UI Kit)
@@ -162,7 +191,7 @@ scripts/              Manifest validation and a live acceptance poll
 
 Only these figures are cited:
 
-- World Commerce & Contracting with Ironclad, *Closing the Procurement Value Gap* (2026): organisations lose an average of **11% of contract value** after signature, including **2 to 3%** in renewal costs from poor forward planning ("auto-renewals at unfavourable terms, missed notice periods, and reactive renegotiation") and **1 to 2%** in penalties and disputes from missed obligations. Caveat: the report was produced with a CLM vendor and the 11% methodology is not fully public. An earlier WorldCC/Deloitte (2023) figure was 8.6% average leakage, self-reported. Sources: [report PDF](https://www.worldcc.com/static/88fffe38-ee53-49da-904c696d0030219d/Procurement-value-gap.pdf), [landing page](https://info.worldcc.com/closing-the-procurement-value-gap).
+- World Commerce & Contracting with Ironclad, *Closing the Procurement Value Gap* (2026): organisations lose an average of **11% of contract value** after signature. The report names auto-renewals at unfavourable terms and missed notice periods among the causes. Caveat: the report was produced with a CLM vendor and its methodology is not fully public. Sources: [report PDF](https://www.worldcc.com/static/88fffe38-ee53-49da-904c696d0030219d/Procurement-value-gap.pdf), [landing page](https://info.worldcc.com/closing-the-procurement-value-gap).
 - Flexera *2023 Tech Spend Pulse*: an estimated **21% of SaaS spend wasted**. Flexera *State of IT Asset Management* (Oct 2022): only **43%** of SAM teams tracked and managed SaaS auto-renewal clauses.
 
 ## Acceptance
@@ -182,6 +211,12 @@ Only these figures are cited:
 - [x] Unit tests for date and status rules, the RED window, blocker open/closed and idempotency pass in CI.
 - [ ] Judge mode: seeded board plus escalation visible within 10 seconds of **opening the board** after a fresh install. First live run: board in 8.8 s with all four agreements and the escalation; rerun the official check (`docs/HANDOFF.md` step 8A) after the latest redeploy. Install-time seeding is best effort (it waits for app permissions, 47 s on the first run).
 - [ ] Sample agreements link to their Confluence contract pages, including when Confluence is connected after Jira. **Fixed in code (backfill); confirm live after redeploy.**
+- [ ] `track-agreement-from-page` proposes with quoted sources, creates only on confirm, and returns the existing agreement on a second run. **Tested offline; confirm live (HANDOFF 8G).**
+- [ ] Import agreements: preview with per-row errors, duplicates skipped, created / skipped / failed per row. **Tested offline; confirm live.**
+- [ ] Review and escalation issues assigned to the owner (or agreement assignee), owner added as watcher, "Owner notified via Jira" on the board. **Tested offline; confirm live.**
+- [ ] Warm board paints from the snapshot in under 3 s; cold under 10 s (see "Fides first useful paint" in the Forge logs). **Confirm live.**
+- [x] Every edge state shows one sentence and one next step (tests per state).
+- [x] Copy lint clean (`node scripts/copy-lint.mjs`, also in `npm test`).
 - [x] README, LICENSE (Apache-2.0), DEMO-SCRIPT.md, SUBMISSION-DRAFT.md, docs/HANDOFF.md, docs/COLOR-THEME.md present.
 - [x] No API tokens or debug credentials in git.
 - [x] Repo left private. No Devpost submission. No video upload.
