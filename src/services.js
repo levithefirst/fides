@@ -71,6 +71,82 @@ export async function resolveConfig(client, preferredProjectKey) {
 export const PERMISSION_MESSAGE =
   'You do not have permission to create issues in a Jira project on this site, so Fides cannot create sample agreements. Ask a Jira admin for the Create issues permission in one project, then reload this page.';
 
+// ---------- owners: resolve once at save, notify through Jira ----------
+
+// Atlassian account ids: 24 alphanumerics (e.g. 5b10a2844c20165700ede21g)
+// or the newer "557058:<uuid>" form.
+const ACCOUNT_ID = /^(?:\d{6}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-z]{24}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+export const isAccountId = (v) => ACCOUNT_ID.test(String(v || '').trim());
+const USER_SEARCH_OFF = 'cap:userSearchUnavailable';
+
+// Turn the owner a person typed (account id, email or name) into a Jira
+// accountId, once, when the agreement is saved. Name and email lookup needs
+// Jira user search (read:jira-user), which Fides does not request; when the
+// site refuses it we remember that for a day and fall back quietly.
+export async function resolveOwner(client, { owner, ownerAccountId } = {}) {
+  if (ownerAccountId) return { ownerAccountId: String(ownerAccountId), ownerResolution: 'picked' };
+  const text = String(owner || '').trim();
+  if (!text) return { ownerAccountId: null, ownerResolution: 'none' };
+  if (isAccountId(text)) return { ownerAccountId: text, ownerResolution: 'account-id' };
+  if (await store.get(USER_SEARCH_OFF)) return { ownerAccountId: null, ownerResolution: 'user-search-unavailable' };
+  try {
+    const users = (await jira.searchUsers(client, text)).filter((u) => u.active !== false && (u.accountType || 'atlassian') === 'atlassian');
+    const t = text.toLowerCase();
+    const exact = users.filter((u) => (u.emailAddress || '').toLowerCase() === t || (u.displayName || '').toLowerCase() === t);
+    if (exact.length === 1) return { ownerAccountId: exact[0].accountId, ownerResolution: 'matched' };
+    if (exact.length > 1 || users.length > 1) return { ownerAccountId: null, ownerResolution: 'ambiguous' };
+    if (users.length === 1) return { ownerAccountId: users[0].accountId, ownerResolution: 'matched' };
+    return { ownerAccountId: null, ownerResolution: 'not-found' };
+  } catch (e) {
+    if (e instanceof ApiError && (e.forbidden || e.status === 404)) {
+      await store.kvsSetTtl(USER_SEARCH_OFF, { at: new Date().toISOString() }, 24 * 3600).catch(() => {});
+      return { ownerAccountId: null, ownerResolution: 'user-search-unavailable' };
+    }
+    return { ownerAccountId: null, ownerResolution: 'not-found' };
+  }
+}
+
+// Who a review or escalation issue goes to: the stored owner, else the
+// agreement issue's assignee, else nobody.
+export async function notifyTarget(client, agreement) {
+  if (agreement.ownerAccountId) return { accountId: agreement.ownerAccountId, via: 'owner' };
+  try {
+    const i = await jira.getIssue(client, agreement.issueKey);
+    if (i.assigneeAccountId) return { accountId: i.assigneeAccountId, via: 'agreement-assignee' };
+  } catch {
+    // fall through to unassigned
+  }
+  return { accountId: null, via: 'unassigned' };
+}
+
+// Create a review or escalation issue assigned to the notify target, then
+// add the owner as a watcher. Jira sends its own notifications; Fides sends
+// no email. A failed assignment or watcher never blocks the issue.
+async function createNotifiedIssue(client, agreement, fields) {
+  const target = await notifyTarget(client, agreement);
+  const issue = await jira.createIssue(client, { ...fields, assigneeAccountId: target.accountId });
+  const warnings = [];
+  if (issue.warning) warnings.push(issue.warning);
+  let watcher = false;
+  if (agreement.ownerAccountId) {
+    try {
+      await jira.addWatcher(client, issue.key, agreement.ownerAccountId);
+      watcher = true;
+    } catch (e) {
+      warnings.push(`Could not add the owner as a watcher: ${e.message}`);
+    }
+  }
+  for (const w of warnings) console.warn(`Fides ${issue.key}: ${w}`);
+  const notify = {
+    via: issue.assigned ? target.via : 'unassigned',
+    assigneeAccountId: issue.assigned ? target.accountId : null,
+    watcher,
+    notified: issue.assigned || watcher,
+    warnings,
+  };
+  return { ...issue, notify };
+}
+
 // ---------- agreements ----------
 
 function agreementDescription(a) {
@@ -105,13 +181,18 @@ export async function createAgreement(client, input, { sample = false, sampleKey
   const labels = [LABELS.AGREEMENT, ...(sample ? [LABELS.SAMPLE, sampleLabel(sampleKey)] : [])];
   const summary = `${record.vendor} agreement${sample ? ' (sample)' : ''}: notice by ${ev.noticeBy}`;
   record.summary = summary;
+  // Sample owners are team names, so judge mode skips the lookup (and keeps
+  // the cold start fast); everyone else is resolved once, here.
+  Object.assign(record, sample ? { ownerAccountId: null, ownerResolution: 'none' } : await resolveOwner(client, input));
   const issue = await jira.createIssue(client, {
     projectId: cfg.projectId,
     issueTypeId: cfg.issueTypeId,
     summary,
     description: agreementDescription(record),
     labels,
+    assigneeAccountId: record.ownerAccountId,
   });
+  if (issue.warning) console.warn(`Fides ${issue.key}: ${issue.warning}`);
   const saved = await store.saveAgreement({
     ...record,
     issueId: issue.id,
@@ -181,7 +262,7 @@ export async function ensureReviewIssue(client, agreement, { reason = 'notice wi
   }
   const cfg = await ensureConfig(client);
   const ev = evaluate(agreement, todayIso());
-  const issue = await jira.createIssue(client, {
+  const issue = await createNotifiedIssue(client, agreement, {
     projectId: agreement.projectId || cfg.projectId,
     issueTypeId: cfg.issueTypeId,
     summary: `Review: ${agreement.vendor} notice by ${shortDate(ev.noticeBy)} (renew, cancel or renegotiate)`,
@@ -196,8 +277,8 @@ export async function ensureReviewIssue(client, agreement, { reason = 'notice wi
   });
   const types = await jira.linkTypeNames(client);
   await jira.linkIssues(client, types.relates, issue.key, agreement.issueKey).catch(() => {});
-  await store.set(store.keys.review(agreement.issueId), { issueKey: issue.key, at: new Date().toISOString() });
-  return { created: true, issueKey: issue.key, url: browse(base, issue.key) };
+  await store.set(store.keys.review(agreement.issueId), { issueKey: issue.key, at: new Date().toISOString(), notify: issue.notify });
+  return { created: true, issueKey: issue.key, url: browse(base, issue.key), notify: issue.notify };
 }
 
 // ---------- threatened-milestone escalation ----------
@@ -231,9 +312,10 @@ export async function escalateAgreement(client, agreement, today, existing, { kn
       // created moments ago, which cannot have an escalation yet).
       const dup = fresh ? [] : await jira.searchIssues(client, `labels = "${plan.label}"`, ['summary'], 1);
       let issueKey = dup[0]?.key;
+      let notify = null;
       if (!issueKey) {
         const { blocker, risk } = plan;
-        const issue = await jira.createIssue(client, {
+        const issue = await createNotifiedIssue(client, agreement, {
           projectId: agreement.projectId || cfg.projectId,
           issueTypeId: cfg.issueTypeId,
           summary: escalationSummary(agreement, blocker, risk),
@@ -250,6 +332,7 @@ export async function escalateAgreement(client, agreement, today, existing, { kn
           labels: [LABELS.ESCALATION, plan.label, ...(agreement.sample ? [LABELS.SAMPLE] : [])],
         });
         issueKey = issue.key;
+        notify = issue.notify;
         await Promise.all([
           jira.linkIssues(client, types.relates, issueKey, agreement.issueKey).catch(() => {}),
           jira.linkIssues(client, types.relates, issueKey, plan.blocker.key).catch(() => {}),
@@ -269,10 +352,11 @@ export async function escalateAgreement(client, agreement, today, existing, { kn
         blockerKey: plan.blocker.key,
         dateAtRisk: plan.risk.date,
         riskKind: plan.risk.kind,
+        notify,
         at: new Date().toISOString(),
       });
       existing.add(plan.key);
-      out.created.push({ issueKey, url: browse(base, issueKey), blockerKey: plan.blocker.key, sentence: riskSentence(plan.risk) });
+      out.created.push({ issueKey, url: browse(base, issueKey), blockerKey: plan.blocker.key, sentence: riskSentence(plan.risk), notify });
     } catch (e) {
       // Release the claim so the next run can retry.
       await store.del(plan.key).catch(() => {});
@@ -627,7 +711,7 @@ export async function boardData(client, { asUser }) {
       .map(async (a) => {
         a.escalations = escalations
           .filter((e) => String(e.agreementId) === String(a.issueId))
-          .map((e) => ({ issueKey: e.issueKey, url: browse(base, e.issueKey), blockerKey: e.blockerKey, dateAtRisk: e.dateAtRisk, riskKind: e.riskKind }));
+          .map((e) => ({ issueKey: e.issueKey, url: browse(base, e.issueKey), blockerKey: e.blockerKey, dateAtRisk: e.dateAtRisk, riskKind: e.riskKind, notify: e.notify || null }));
         try {
           a.openBlockers = (await findBlockers(client, a))
             .filter(isBlockerOpen)

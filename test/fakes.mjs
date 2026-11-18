@@ -58,7 +58,21 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
   let nextPage = 900001;
   const base = 'https://example-site.atlassian.net';
   // Toggles for clean-site permission states.
-  const state = { confluence, canCreate: true, createmetaEmpty: false, canBrowse: true, failCreateFor: null };
+  const state = {
+    confluence,
+    canCreate: true,
+    createmetaEmpty: false,
+    canBrowse: true,
+    failCreateFor: null,
+    // Users and assignment. userSearch false = the app lacks read:jira-user (the live situation).
+    users: [
+      { accountId: '5b10a2844c20165700ede21g', displayName: 'Dana Whitfield', emailAddress: 'dana@example.com' },
+      { accountId: '5b10ac8d82e05b22cc7d4ef5', displayName: 'Sam Okafor', emailAddress: 'sam@example.com' },
+    ],
+    userSearch: false,
+    unassignable: new Set(),
+    defaultAssignee: null,
+  };
 
   const json = (status, body) => ({
     status,
@@ -73,6 +87,7 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
       summary: i.summary,
       labels: i.labels,
       status: { name: i.status, statusCategory: { key: i.statusCategory } },
+      assignee: i.assignee ? { accountId: i.assignee } : null,
       project: { id: i.projectId, key: i.projectKey },
       issuelinks: i.links.map((k) => ({ type: { name: 'Blocks' }, outwardIssue: { id: issues.get(k).id, key: k } })),
     },
@@ -81,7 +96,7 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
   async function handle(product, path, opts = {}) {
     const method = opts.method || 'GET';
     const body = opts.body ? JSON.parse(opts.body) : null;
-    calls.push(`${method} ${path}`);
+    calls.push(`${method} ${path.value ?? path}`);
     await sleep(latencyMs + (extraLatency ? extraLatency(product, method, String(path.value ?? path), body) : 0));
     const p = String(path.value ?? path);
     let m;
@@ -99,7 +114,10 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
         const id = String(nextIssue++);
         const proj = projects.find((x) => x.id === body.fields.project.id);
         const key = `${proj.key}-${id.slice(-3).replace(/^0+/, '')}`;
-        issues.set(key, { id, key, summary: body.fields.summary, labels: body.fields.labels || [], status: 'To Do', statusCategory: 'new', projectId: proj.id, projectKey: proj.key, links: [], remote: [], comments: [] });
+        const want = body.fields.assignee?.id || null;
+        if (want && (state.unassignable.has(want) || !state.users.some((u) => u.accountId === want)))
+          return json(400, { errorMessages: [], errors: { assignee: `User '${want}' cannot be assigned issues.` } });
+        issues.set(key, { id, key, summary: body.fields.summary, labels: body.fields.labels || [], status: 'To Do', statusCategory: 'new', projectId: proj.id, projectKey: proj.key, links: [], remote: [], comments: [], watchers: [], assignee: want || state.defaultAssignee });
         return json(201, { id, key });
       }
       if (p === '/rest/api/3/search/jql') {
@@ -128,6 +146,16 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
         if (i >= 0) remote[i] = entry;
         else remote.push(entry);
         return json(201, { id: 1 });
+      }
+      if ((m = /^\/rest\/api\/3\/issue\/([^/?]+)\/watchers$/.exec(p)) && method === 'POST') {
+        if (!state.users.some((u) => u.accountId === body)) return json(404, { errorMessages: ['User not found'] });
+        issues.get(m[1]).watchers.push(body);
+        return json(204);
+      }
+      if (p.startsWith('/rest/api/3/user/search')) {
+        if (!state.userSearch) return json(403, { message: 'Unauthorized; scope does not match' });
+        const q = decodeURIComponent(/query=([^&]+)/.exec(p)[1]).toLowerCase();
+        return json(200, state.users.filter((u) => u.displayName.toLowerCase().includes(q) || u.emailAddress.toLowerCase() === q).map((u) => ({ ...u, accountType: 'atlassian', active: true })));
       }
       if ((m = /^\/rest\/api\/3\/issue\/([^/?]+)\/comment$/.exec(p))) {
         issues.get(m[1]).comments.push(body.body);

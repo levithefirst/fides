@@ -34,6 +34,7 @@ export const keys = {
 export const get = (k) => kvs.get(k);
 export const set = (k, v) => kvs.set(k, v);
 export const del = (k) => kvs.delete(k);
+export const kvsSetTtl = (k, v, seconds) => kvs.set(k, v, { ttl: { value: seconds, unit: 'SECONDS' } });
 
 // Returns true if this caller won the key, false if it already existed.
 export async function claim(key, value, ttlSeconds) {

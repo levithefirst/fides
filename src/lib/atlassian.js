@@ -91,27 +91,50 @@ export async function pickIssueType(client, projectKey) {
   return { id: chosen.id, name: chosen.name };
 }
 
-export async function createIssue(client, { projectId, issueTypeId, summary, description, labels }) {
-  const res = await call(client, 'jira', route`/rest/api/3/issue`, {
-    method: 'POST',
-    body: {
-      fields: {
-        project: { id: String(projectId) },
-        issuetype: { id: String(issueTypeId) },
-        summary: summary.slice(0, 250),
-        ...(description ? { description } : {}),
-        labels,
-      },
-    },
-  });
-  return { id: res.id, key: res.key };
+// With `assigneeAccountId`, Jira assigns on create (and sends its own
+// assignment notification). If Jira rejects the assignee (not assignable in
+// the project, deactivated user), the issue is created unassigned and the
+// returned `warning` says why; the create itself never fails on it.
+export async function createIssue(client, { projectId, issueTypeId, summary, description, labels, assigneeAccountId = null }) {
+  const fields = {
+    project: { id: String(projectId) },
+    issuetype: { id: String(issueTypeId) },
+    summary: summary.slice(0, 250),
+    ...(description ? { description } : {}),
+    labels,
+  };
+  const post = (f) => call(client, 'jira', route`/rest/api/3/issue`, { method: 'POST', body: { fields: f } });
+  if (!assigneeAccountId) {
+    const res = await post(fields);
+    return { id: res.id, key: res.key, assigned: false };
+  }
+  try {
+    const res = await post({ ...fields, assignee: { id: String(assigneeAccountId) } });
+    return { id: res.id, key: res.key, assigned: true };
+  } catch (e) {
+    if (!(e instanceof ApiError) || e.status !== 400 || !/assignee/i.test(e.message)) throw e;
+    const res = await post(fields);
+    return { id: res.id, key: res.key, assigned: false, warning: `Could not assign to the owner: ${e.message}` };
+  }
+}
+
+export async function addWatcher(client, issueKey, accountId) {
+  // The body is the account id as a JSON string.
+  await call(client, 'jira', route`/rest/api/3/issue/${issueKey}/watchers`, { method: 'POST', body: String(accountId) });
+}
+
+// Needs the read:jira-user scope, which Fides does not request. Callers
+// treat 401/403 as "user search unavailable" and fall back.
+export async function searchUsers(client, query) {
+  const res = await call(client, 'jira', route`/rest/api/3/user/search?query=${query}&maxResults=10`);
+  return (res || []).map((u) => ({ accountId: u.accountId, displayName: u.displayName, emailAddress: u.emailAddress, accountType: u.accountType, active: u.active }));
 }
 
 export async function getIssue(client, issueIdOrKey) {
   const res = await call(
     client,
     'jira',
-    route`/rest/api/3/issue/${issueIdOrKey}?fields=summary,status,labels,issuelinks,project,issuetype`
+    route`/rest/api/3/issue/${issueIdOrKey}?fields=summary,status,labels,issuelinks,project,issuetype,assignee`
   );
   return normaliseIssue(res);
 }
@@ -126,6 +149,7 @@ export function normaliseIssue(i) {
     statusCategory: i.fields?.status?.statusCategory?.key,
     projectKey: i.fields?.project?.key,
     projectId: i.fields?.project?.id,
+    assigneeAccountId: i.fields?.assignee?.accountId || null,
     links: (i.fields?.issuelinks || []).map((l) => {
       const other = l.inwardIssue || l.outwardIssue;
       return { linkType: l.type?.name, id: other?.id, key: other?.key };

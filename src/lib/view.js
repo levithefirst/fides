@@ -126,7 +126,7 @@ export function spotlightFor(agreements, escalations = []) {
     formula: `Notice by ${a.noticeBy} = end date ${a.endDate} minus ${a.noticeDays} days notice`,
     timing: a.daysLeft < 0 ? `${-a.daysLeft} days ago` : a.daysLeft === 0 ? 'today' : `in ${a.daysLeft} days`,
     blocker,
-    escalation: esc ? { issueKey: esc.issueKey, url: esc.url || null } : null,
+    escalation: esc ? { issueKey: esc.issueKey, url: esc.url || null, notify: esc.notify || null } : null,
     why: blocker ? WHY_LINE : null,
     askPrompt: `Is ${shortName(a.vendor)} at risk, and what should I do?`,
   };

@@ -23,6 +23,7 @@ import ForgeReconciler, {
   Text,
   TextArea,
   Textfield,
+  UserPicker,
   xcss,
 } from '@forge/react';
 import { invoke, rovo } from '@forge/bridge';
@@ -99,6 +100,7 @@ function AgreementTable({ items, base, escalatedIds, onReview, onLinkPage, busy 
               <Inline key={e.issueKey} space="space.050" shouldWrap>
                 <Text size="small" color="color.text.danger">Escalated:</Text>
                 <Link href={e.url || browse(base, e.issueKey)}>{e.issueKey}</Link>
+                {notifyText(e.notify) ? <Text size="small" color="color.text.subtle">{notifyText(e.notify)}</Text> : null}
               </Inline>
             ))}
             {!(a.escalations || []).length && escalatedIds.has(String(a.issueId)) ? (
@@ -298,7 +300,13 @@ function AddAgreement({ onClose, onSaved }) {
           <DatePicker id="endDate" value={f.endDate} onChange={up('endDate')} />
           <Label labelFor="noticeDays">Notice period (days)</Label>
           <Textfield id="noticeDays" type="number" value={f.noticeDays} onChange={up('noticeDays')} />
-          <Label labelFor="owner">Owner</Label>
+          <UserPicker
+            label="Owner (gets review and escalation issues in Jira)"
+            name="ownerAccountId"
+            placeholder="Pick a Jira user"
+            onChange={(u) => setF({ ...f, ownerAccountId: u?.id || null, owner: u?.name || f.owner })}
+          />
+          <Label labelFor="owner">Owner team or name (optional, shown on the board)</Label>
           <Textfield id="owner" value={f.owner} onChange={up('owner')} />
           <Label labelFor="spend">Spend (display only)</Label>
           <Textfield id="spend" value={f.spend} onChange={up('spend')} />
@@ -438,6 +446,7 @@ function Spotlight({ s, base }) {
             <Text weight="medium">Escalation:</Text>
             <Link href={s.escalation.url || browse(base, s.escalation.issueKey)}>{s.escalation.issueKey}</Link>
             <Text>{`this blocker may put the notice date of ${s.noticeByShort} at risk.`}</Text>
+            {notifyText(s.escalation.notify) ? <Text color="color.text.subtle">{notifyText(s.escalation.notify)}</Text> : null}
           </Inline>
         ) : s.blocker ? (
           <Text color="color.text.subtle">Escalation pending.</Text>
@@ -449,6 +458,10 @@ function Spotlight({ s, base }) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Plain words for how the owner hears about an escalation.
+const notifyText = (n) =>
+  !n ? null : n.notified ? 'Owner notified via Jira' : 'Not assigned: no owner account found. Assign it in Jira.';
 
 function Board() {
   const [data, setData] = useState(null);
