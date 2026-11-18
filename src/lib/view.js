@@ -12,16 +12,26 @@ export const CONFLUENCE_NOTE =
 
 const SAMPLE_TOTAL = 4;
 
+// "Updated 4m ago, refreshing" for a board painted from the cached snapshot.
+export function freshnessText(savedAt, now = Date.now()) {
+  const t = Date.parse(savedAt);
+  if (!Number.isFinite(t)) return 'Refreshing';
+  const mins = Math.max(0, Math.round((now - t) / 60000));
+  const age = mins < 1 ? 'just now' : mins < 60 ? `${mins}m ago` : mins < 48 * 60 ? `${Math.round(mins / 60)}h ago` : `${Math.round(mins / 1440)}d ago`;
+  return `Updated ${age}, refreshing`;
+}
+
 // data:      board payload from the getBoard / bootstrap resolver (may be null)
 // seeding:   true while this board's own seed call is in flight
 // rovo:      true | false | null (null = not known yet)
-export function deriveBoardView(data, { seeding = false, rovo = null } = {}) {
+export function deriveBoardView(data, { seeding = false, rovo = null, now = Date.now() } = {}) {
   if (!data) {
     return { mode: 'loading', banner: { appearance: 'information', title: 'Loading the notice board', text: 'Reading agreements from Jira.' } };
   }
   const agreements = data.agreements || [];
   const seedState = data.seed?.state;
   const view = {
+    freshness: data.fromSnapshot ? freshnessText(data.savedAt, now) : null,
     mode: 'ready',
     banner: null,
     showPicker: false,

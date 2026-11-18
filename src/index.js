@@ -27,7 +27,7 @@ const resolver = new Resolver();
 
 // First open of the board: seed judge-mode data if this is a fresh site,
 // then return the board. Never throws to the UI.
-resolver.define('bootstrap', async () => {
+resolver.define('bootstrap', async ({ context }) => {
   const client = api.asUser();
   let seed = null;
   try {
@@ -38,14 +38,14 @@ resolver.define('bootstrap', async () => {
   // Link sample agreements to their Confluence pages if Confluence became
   // reachable after seeding. No API calls when everything is linked.
   const backfill = await svc.backfillSamplePages(client).catch((e) => ({ errors: [friendly(e)] }));
-  const board = await safeBoard(client);
+  const board = await safeBoard(client, context?.accountId);
   return { ...board, seedResult: seed, backfill: { linked: backfill.linked?.length || 0, errors: backfill.errors?.slice(0, 3) || [] } };
 });
 
 // Never a blank board: any failure comes back as a message the UI shows.
-export async function safeBoard(client) {
+export async function safeBoard(client, accountId = null) {
   try {
-    return await svc.boardData(client, { asUser: true });
+    return await svc.boardData(client, { asUser: true, accountId });
   } catch (e) {
     const perm = e instanceof jira.ApiError && e.permissionDenied;
     return {
@@ -59,7 +59,17 @@ export async function safeBoard(client) {
   }
 }
 
-resolver.define('getBoard', async () => safeBoard(api.asUser()));
+resolver.define('getBoard', async ({ context }) => safeBoard(api.asUser(), context?.accountId));
+
+// Cheap KVS read: the last board this user saw, painted before anything else.
+resolver.define('getSnapshot', async ({ context }) => svc.getSnapshot(context?.accountId));
+
+resolver.define('backfill', async () => {
+  const r = await svc.backfillSamplePages(api.asUser()).catch(() => ({ linked: [] }));
+  return { linked: r.linked?.length || 0 };
+});
+
+resolver.define('logPaint', async ({ payload }) => svc.recordPaint(payload || {}));
 
 resolver.define('listProjects', async () => {
   try {

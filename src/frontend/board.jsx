@@ -458,6 +458,7 @@ function Spotlight({ s, base }) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const T0 = Date.now(); // board script start, for the first-paint timing
 
 // Plain words for how the owner hears about an escalation.
 const notifyText = (n) =>
@@ -477,10 +478,32 @@ function Board() {
   useEffect(() => {
     rovo.isEnabled().then((v) => setRovoOn(Boolean(v))).catch(() => setRovoOn(false));
     let finished = false;
+    let freshSeen = false;
+    let painted = false;
+    // First useful paint: the first time agreements are on screen.
+    const markPaint = (d, source) => {
+      if (painted || !d?.agreements?.length) return;
+      painted = true;
+      invoke('logPaint', { ms: Date.now() - T0, source, agreements: d.agreements.length }).catch(() => {});
+    };
     (async () => {
-      // 1. Show what exists right away (a cheap read, no seeding).
-      const first = await invoke('getBoard').catch(() => null);
-      if (first) setData(first);
+      // 1. Paint from this user's last snapshot (one KVS read), while the
+      //    fresh board loads in parallel. Fresh data always wins.
+      const freshP = invoke('getBoard').catch(() => null);
+      invoke('getSnapshot')
+        .then((snap) => {
+          if (snap && !freshSeen) {
+            setData(snap);
+            markPaint(snap, 'snapshot');
+          }
+        })
+        .catch(() => {});
+      const first = await freshP;
+      freshSeen = true;
+      if (first) {
+        setData(first);
+        markPaint(first, 'fresh');
+      }
       const st = first?.seed?.state;
       const needsSeed = st !== 'done' && st !== 'skipped';
       // 2. Seed (idempotent) while polling, so the Helios row and its
@@ -490,20 +513,33 @@ function Board() {
         setSeeding(true);
         poll = setInterval(async () => {
           const next = await invoke('getBoard').catch(() => null);
-          if (next && !finished) setData(next);
+          if (next && !finished) {
+            setData(next);
+            markPaint(next, 'seeding');
+          }
         }, 1000);
       }
-      let res = await invoke('bootstrap').catch(() => null);
+      let res = needsSeed || !first ? await invoke('bootstrap').catch(() => null) : null;
       // The install trigger may hold the seed lock: wait for it, then retry.
       for (let i = 0; res?.seedResult?.state === 'running' && i < 20; i += 1) {
         await sleep(1500);
         res = await invoke('bootstrap').catch(() => null);
       }
+      // Warm site: run the Confluence backfill in the background, no repaint needed.
+      if (!needsSeed && first) {
+        invoke('backfill')
+          .then(async (r) => {
+            if (r?.linked) setData(await invoke('getBoard'));
+          })
+          .catch(() => {});
+      }
       finished = true;
       if (poll) clearInterval(poll);
       setSeeding(false);
-      if (res) setData(res);
-      else if (!first) setData({ loadError: 'Fides could not reach its backend. Reload the page to retry.', agreements: [], counts: { due: 0, upcoming: 0, onTrack: 0 } });
+      if (res) {
+        setData(res);
+        markPaint(res, 'seeded');
+      } else if (!first) setData({ loadError: 'Fides could not reach its backend. Reload the page to retry.', agreements: [], counts: { due: 0, upcoming: 0, onTrack: 0 } });
     })();
   }, []);
 
@@ -560,7 +596,7 @@ function Board() {
           <Stack space="space.050">
             <Heading size="large">Notice board</Heading>
             <Text color="color.text.subtle">
-              {`${counts.due} Due · ${counts.upcoming} Upcoming · ${counts.onTrack} On track · today ${data.today || ''}`}
+              {`${counts.due} Due · ${counts.upcoming} Upcoming · ${counts.onTrack} On track · today ${data.today || ''}${view.freshness ? ` · ${view.freshness}` : ''}`}
             </Text>
           </Stack>
           <ButtonGroup>

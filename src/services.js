@@ -685,7 +685,40 @@ export async function judgeModeSeed(client, source, { force = false } = {}) {
 
 // ---------- board data ----------
 
-export async function boardData(client, { asUser }) {
+// ---------- fast first paint ----------
+
+const SNAPSHOT_MAX_AGREEMENTS = 200;
+
+// Per user, so a cached paint never shows an issue that user cannot open.
+export async function saveSnapshot(accountId, board) {
+  if (!accountId || !board || board.loadError) return;
+  const data = { ...board, agreements: (board.agreements || []).slice(0, SNAPSHOT_MAX_AGREEMENTS) };
+  delete data.seedResult;
+  delete data.backfill;
+  await store.set(store.keys.snapshot(accountId), { savedAt: new Date().toISOString(), data }).catch(() => {});
+}
+
+export async function getSnapshot(accountId) {
+  if (!accountId) return null;
+  const s = await store.get(store.keys.snapshot(accountId)).catch(() => null);
+  return s?.data ? { ...s.data, fromSnapshot: true, savedAt: s.savedAt } : null;
+}
+
+export async function recordPaint({ ms, source, agreements }) {
+  const entry = { ms: Math.round(Number(ms) || 0), source: String(source || ''), agreements: Number(agreements) || 0, at: new Date().toISOString() };
+  console.log(`Fides first useful paint: ${entry.ms} ms from ${entry.source} (${entry.agreements} agreements)`);
+  const prev = (await store.get(store.keys.paintMetrics).catch(() => null)) || [];
+  await store.set(store.keys.paintMetrics, [entry, ...prev].slice(0, 20)).catch(() => {});
+  return entry;
+}
+
+export async function boardData(client, { asUser, accountId = null } = {}) {
+  const board = await computeBoard(client, { asUser });
+  await saveSnapshot(accountId, board);
+  return board;
+}
+
+async function computeBoard(client, { asUser }) {
   const today = todayIso();
   const [cfg, seed, lastRun, escKeys] = await Promise.all([
     store.get(store.keys.config),

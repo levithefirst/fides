@@ -13,6 +13,8 @@
 //   samplePage:<sampleKey>   { id, url } the sample's Confluence page
 //   lock:page:<sampleKey>    short-lived page-creation lock
 //   pageAgreement:<pageId>   { issueId } agreement tracked from that page
+//   snapshot:<accountId>     last board payload this user saw (fast first paint)
+//   metrics:paint            last 20 first-paint timings
 //   lock:track:<pageId>      short-lived track-from-page lock
 
 import { kvs, WhereConditions } from '@forge/kvs';
@@ -25,6 +27,8 @@ export const keys = {
   pageLock: (k) => `lock:page:${k}`,
   pageAgreement: (id) => `pageAgreement:${id}`,
   trackLock: (id) => `lock:track:${id}`,
+  snapshot: (accountId) => `snapshot:${accountId}`,
+  paintMetrics: 'metrics:paint',
   config: 'config',
   seed: 'seed',
   seedLock: 'lock:seed',
