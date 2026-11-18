@@ -54,7 +54,7 @@ The agent prompt (`static/agent/prompt.txt`) tells it to use only action data, h
 
 | Criterion (20% each) | How Fides meets it | Atlassian features used |
 | --- | --- | --- |
-| **Technological Implementation** | A real loop, not a single demo path: structured agreements, a shared status rule used by the board, scan and agent, idempotent escalation (KVS `FAIL_IF_EXISTS` claims plus Jira label guards), install-time and first-open seeding with a lock, permission-aware reads via bulk fetch, a deterministic contract-page parser, a validated 100-row import through the same create path as the form, owner notification with a three-step fallback, and a per-user snapshot for fast first paint. 97 tests in CI. | **Forge modules**: `jira:globalPage`, `jira:issuePanel`, `scheduledTrigger` (interval `day`, `api.asApp()`), `trigger` on `avi:forge:installed:app`, Key-Value Store (`@forge/kvs`). **Jira issues and links**: agreements, blockers, review and escalation issues, issue links, remote links. |
+| **Technological Implementation** | A real loop, not a single demo path: structured agreements, a shared status rule used by the board, scan and agent, idempotent escalation (KVS `FAIL_IF_EXISTS` claims plus Jira label guards), install-time and first-open seeding with a lock, permission-aware reads via bulk fetch, a deterministic contract-page parser, a validated 100-row import through the same create path as the form, owner notification with a three-step fallback, and a per-user snapshot for fast first paint. 108 tests in CI. | **Forge modules**: `jira:globalPage`, `jira:issuePanel`, `scheduledTrigger` (interval `day`, `api.asApp()`), `trigger` on `avi:forge:installed:app`, Key-Value Store (`@forge/kvs`). **Jira issues and links**: agreements, blockers, review and escalation issues, issue links, remote links. |
 | **Design** | Native UI Kit, ADS tokens, light and dark themes, colourblind-safe chips (shape plus label), 30/60/90 grouping, last-scan status, one Fides Umber accent. Every edge state is one plain sentence and one next step. The board paints from a cached snapshot ("Updated 4m ago, refreshing") and swaps in fresh data without a layout jump. Import shows a preview with per-row errors before anything is created. | UI Kit (`render: native`, `UserPicker`, `DynamicTable`), ADS tokens, Rovo bridge `rovo.open` from the board. |
 | **Potential Impact** | Missed notice periods and auto-renewals are a named cause of value leakage (see Evidence). Fides puts the date, the obligation and the blocker in the tools these teams already use, and acts before the window closes. Teams get started fast: paste their existing spreadsheet, or track a contract straight from its Confluence page. The owner hears about it through Jira itself: review and escalation issues are assigned to them and they are added as a watcher. | **Jira issues** as the system of record (assignee and watchers drive Jira's own notifications), **Confluence contract pages** as the source of terms. |
 | **Innovation / Idea** | Connects contract dates to live work: an open blocker issue threatening a notice date triggers a hedged escalation automatically and through the agent. The agent can also turn a contract page into a tracked agreement, quoting each clause it relied on. | **Rovo agent + actions**: `rovo:agent` with five `action` modules (`GET`, `CREATE`). **Confluence**: contract pages read as the user for the brief and for track-from-page. |
@@ -111,6 +111,8 @@ The board paints from your own last snapshot (one storage read, no Jira calls), 
    - one open blocker on Helios Payroll ("Approval pending: finance sign-off ...");
    - the **escalation issue** for it, created immediately, not on the next daily run;
    - a review issue for the Due agreement.
+
+   The samples are created **once per site**, even if you install Fides on both Jira and Confluence, uninstall and reinstall, or open the board while the install is still running. Jira is the source of truth: Fides finds its existing sample issues by label and reuses them instead of creating new ones. Only the Jira install seeds; the Confluence install only links the contract pages.
 4. The board shows all of this, plus the escalation message, within about 10 seconds.
 5. Click **Is Helios at risk, and what should I do?** under the spotlight, or open Rovo Chat, choose **Fides** and pick that conversation starter.
 6. Open the sample contract page for Northwind Analytics in Confluence, open Rovo there and say "Track this contract". Fides says it is already tracked (one agreement per page). Try it on any other contract page to see a proposal with quoted sources.
@@ -131,7 +133,7 @@ Requires **Node 22.x (22.23.4 or later) or 24.x (24.22.1 or later)**, per the li
 ```bash
 npm install -g @forge/cli@latest
 npm ci
-npm test                    # 97 unit and integration tests
+npm test                    # 108 unit and integration tests
 node scripts/copy-lint.mjs  # copy rules (also runs in npm test)
 npm run validate:manifest   # offline schema check with @forge/manifest
 ```
@@ -217,6 +219,7 @@ Only these figures are cited:
 - [ ] Warm board paints from the snapshot in under 3 s; cold under 10 s (see "Fides first useful paint" in the Forge logs). **Confirm live.**
 - [x] Every edge state shows one sentence and one next step (tests per state).
 - [x] Copy lint clean (`node scripts/copy-lint.mjs`, also in `npm test`).
+- [ ] Samples created exactly once per site across Jira + Confluence installs, reinstalls and concurrent runs. **Fixed and tested offline after the live duplicate finding; confirm live (HANDOFF 8H).**
 - [x] README, LICENSE (Apache-2.0), DEMO-SCRIPT.md, SUBMISSION-DRAFT.md, docs/HANDOFF.md, docs/COLOR-THEME.md present.
 - [x] No API tokens or debug credentials in git.
 - [x] Repo left private. No Devpost submission. No video upload.

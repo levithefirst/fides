@@ -12,6 +12,7 @@ Everything that cannot be done from a code session, written for Grok Bot and Flu
   2. Install-time seeding is best effort with retry and back-off; the official 10 s check is now "open the board after install". See step 8.
   3. The umber accent bar above the board heading now renders (see `docs/COLOR-THEME.md`).
 - Code sessions do not run `forge login`, `register`, `deploy` or `install`; Fluid deploys.
+- **Sample seeding idempotency (fixed after a live cold-install test):** uninstall/reinstall on one-atlas-wptq created two extra sample sets (CLSD-21..27 at +47 s, CLSD-28..34 at +104 s), one per product install, because each install has its own app storage and the old code only reused a sample issue when its storage record existed. Now Jira is the source of truth: existing `fides-sample-<key>` issues are reused and the record rebuilt from the issue; blockers and reviews are found by label plus link; only the Jira install seeds (the Confluence install only links pages); a 60 s lock plus re-checks guards concurrent runs. **Samples are created once per site even if both products are installed.** Plain `forge deploy`; no scope change. Clean up the extra sets with step 8H.
 
 ## Steps
 
@@ -151,6 +152,24 @@ Deploy note: **no scope change** in this batch, so `forge deploy` is enough; exi
 4. Fast paint: open the board twice. The second open paints immediately with "Updated ... ago, refreshing", then the text disappears. The Forge logs show "Fides first useful paint: N ms from snapshot" (target under 3000 warm, under 10000 cold).
 5. Edge states: as a user with Browse but not Create issues in the Fides project, the board shows "You can view agreements but cannot create issues in <KEY>." with a next step, and the create buttons are disabled.
 6. Copy: `node scripts/copy-lint.mjs` prints "copy lint: clean" (it also runs in `npm test`).
+
+### 8H. Clean up duplicate samples and verify once-only seeding
+
+1. Dry run (changes nothing), from a box with the credentials in the environment:
+
+   ```bash
+   FORGE_EMAIL=memequant@mail.grokbot.com FORGE_API_TOKEN=<from the environment> \
+   node scripts/reset-samples.mjs --site https://one-atlas-wptq.atlassian.net
+   ```
+
+   It lists every issue labelled `fides-sample` / `fides-sample-<key>` (agreements, blockers, reviews, escalations) with key, kind and summary, and nothing else. Check the list. Non-sample issues are never listed or touched. The token must be allowed to call the Jira REST API for the site (a classic API token, or a scoped token with Jira work read and write); a Forge-only scoped token will get HTTP 401/403.
+2. Delete exactly those issues: the same command with `--apply`.
+3. `forge deploy` this fix, then either open the Fides board and click **Load samples**, or `forge uninstall` and reinstall.
+4. Verify once-only seeding on a fresh install:
+   - install on Jira, wait for "Fides judge mode on install (jira): done" in the logs;
+   - install (or connect) Confluence; the logs show no seeding for it, only page linking;
+   - uninstall and reinstall Jira; the logs say "reused 4 existing sample agreement(s)";
+   - JQL `labels = fides-sample AND labels = fides-agreement` returns exactly 4 issues, `labels = fides-escalation` exactly 1, `labels = fides-review AND labels = fides-sample` exactly 1.
 
 ### 9. Pre-flight the full acceptance list on the demo site
 
