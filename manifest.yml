@@ -57,7 +57,7 @@ modules:
       function: action-list
       actionVerb: GET
       description: |
-        List vendor agreements whose notice-by date is Due (within 14 days or already past) or falls within the next N days (default 60). Returns status, notice-by date, days left, owner, contract page, open blockers, any open review issue (openReview) and existing escalation keys, so you can tell the user whether a later create-review-issue or escalate-threatened-milestones confirm will reuse an existing issue or create a new one.
+        List agreements Due (notice-by within 14 days or past) or in the next N days (default 60). Returns status, dates, owner, contract page, open blockers, openReview and escalation keys, so you can say whether a later CREATE confirm will reuse or create.
       inputs:
         days:
           title: Lookahead in days
