@@ -312,18 +312,20 @@ export async function listUpcomingNotices(payload) {
       escByAgreement.set(id, [...(escByAgreement.get(id) || []), { issueKey: v.issueKey, blockerKey: v.blockerKey, dateAtRisk: v.dateAtRisk || null }]);
     }
     const notices = upcomingNotices(agreements, today, days);
-    // Open blockers for Due agreements, read as the user, so the agent can
-    // see what a date reminder cannot: the decision is stuck on open work.
+    // Open blockers for Due agreements, and open reviews for the list, so
+    // the agent can say in chat whether a later CREATE confirm will reuse
+    // an existing issue or create a new one.
     const blockersById = new Map();
-    await Promise.all(
-      notices
+    const [reviewByKey] = await Promise.all([
+      svc.loadOpenReviewsByAgreement(client, notices.map((a) => a.issueKey)),
+      ...notices
         .filter((a) => a.status === 'DUE')
         .slice(0, 10)
         .map(async (a) => {
           const b = await svc.findBlockers(client, a).catch(() => []);
           blockersById.set(String(a.issueId), b.filter((x) => x.statusCategory !== 'done').map((x) => ({ key: x.key, summary: x.summary, status: x.statusName })));
-        })
-    );
+        }),
+    ]);
     const list = notices.map((a) => ({
       issueKey: a.issueKey,
       vendor: a.vendor,
@@ -337,6 +339,7 @@ export async function listUpcomingNotices(payload) {
       contractPage: a.confluenceUrl || null,
       escalated: escByAgreement.has(String(a.issueId)),
       escalations: escByAgreement.get(String(a.issueId)) || [],
+      openReview: reviewByKey.get(a.issueKey) || null,
       openBlockers: blockersById.get(String(a.issueId)) || [],
       noticeByRule: `${a.endDate} minus ${a.noticeDays} days notice = ${a.noticeBy}`,
     }));

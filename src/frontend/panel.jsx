@@ -1,9 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import ForgeReconciler, { Link, SectionMessage, Spinner, Stack, Inline, Text } from '@forge/react';
-import { invoke, requestJira, view } from '@forge/bridge';
+import ForgeReconciler, { Link, SectionMessage, Spinner, Stack, Inline, Text, useProductContext } from '@forge/react';
+import { invoke, requestJira } from '@forge/bridge';
 import { StatusChip, Footer } from './components';
-import { todayIso } from '../lib/dates.js';
-import { panelPeekFromProperty } from '../lib/panelPeek.js';
+import { peekFromIssueKey } from '../lib/panelPeek.js';
 
 const ROLE = {
   agreement: null,
@@ -13,40 +12,52 @@ const ROLE = {
   linked: 'Linked to a Fides agreement.',
 };
 
-async function peekFromIssue() {
-  try {
-    const ctx = await view.getContext();
-    const key = ctx?.extension?.issue?.key;
-    if (!key) return null;
-    const res = await requestJira(`/rest/api/3/issue/${encodeURIComponent(key)}/properties/fides-agreement`, {
-      headers: { Accept: 'application/json' },
-    });
-    if (!res.ok) return null;
-    const body = await res.json();
-    return panelPeekFromProperty(body?.value, todayIso());
-  } catch {
-    return null;
-  }
-}
-
 function Panel() {
+  const context = useProductContext();
+  const issueKey = context?.extension?.issue?.key;
   const [d, setD] = useState(null);
+
   useEffect(() => {
     let cancelled = false;
-    peekFromIssue().then((peek) => {
-      if (!cancelled && peek) setD((cur) => cur && !cur.fromPeek ? cur : peek);
-    });
-    invoke('getPanel')
-      .then((full) => {
-        if (!cancelled) setD(full);
+    let invoked = false;
+    const startFull = () => {
+      if (invoked || cancelled) return;
+      invoked = true;
+      invoke('getPanel')
+        .then((full) => {
+          if (!cancelled) setD(full);
+        })
+        .catch(() => {
+          if (!cancelled) setD((cur) => (cur ? cur : { kind: 'error' }));
+        });
+    };
+
+    // Wait briefly for product context so we can peek the issue property
+    // *before* queueing the slow getPanel resolver. A shared Forge bridge
+    // is first-in-first-out: if invoke runs first, the peek sits behind
+    // a cold-start function (several seconds) and the first paint is lost.
+    if (!issueKey) {
+      const t = setTimeout(startFull, 2000);
+      return () => {
+        cancelled = true;
+        clearTimeout(t);
+      };
+    }
+
+    peekFromIssueKey(issueKey, requestJira)
+      .then((peek) => {
+        if (!cancelled && peek) setD((cur) => (cur && !cur.fromPeek ? cur : peek));
       })
-      .catch(() => {
-        if (!cancelled) setD((cur) => (cur ? cur : { kind: 'error' }));
+      .finally(() => {
+        if (cancelled) return;
+        setTimeout(startFull, 0);
       });
+
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [issueKey]);
+
   if (!d) return <Spinner label="Loading Fides status" />;
   if (d.kind === 'error') {
     return (

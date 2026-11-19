@@ -1269,15 +1269,33 @@ export async function boardData(client, { asUser, accountId = null } = {}) {
   return board;
 }
 
+
+// Open fides-review issues linked to the given agreement keys, oldest first.
+// Shared by the board and the read-only list-upcoming-notices action so the
+// agent can say whether create-review-issue will reuse or create.
+export async function loadOpenReviewsByAgreement(client, agreementKeys, base = '') {
+  const keys = agreementKeys instanceof Set ? agreementKeys : new Set(agreementKeys || []);
+  if (!keys.size) return new Map();
+  const issues = await jira.searchAll(client, `labels = "${LABELS.REVIEW}" ORDER BY created ASC`, ['summary', 'labels', 'status', 'issuelinks', 'created']).catch(() => []);
+  const out = new Map();
+  for (const i of issues) {
+    if (i.statusCategory === 'done') continue;
+    for (const l of i.links || []) {
+      if (!keys.has(l.key) || out.has(l.key)) continue;
+      out.set(l.key, { issueKey: i.key, url: browse(base, i.key) });
+    }
+  }
+  return out;
+}
+
 async function computeBoard(client, { asUser }) {
   const today = todayIso();
-  const [cfg, seed, lastRun, loaded, escRecords, reviewIssues] = await Promise.all([
+  const [cfg, seed, lastRun, loaded, escRecords] = await Promise.all([
     store.get(store.keys.config),
     store.get(store.keys.seed),
     store.get(store.keys.lastRun),
     loadAgreements(client),
     loadEscalations(client),
-    jira.searchAll(client, `labels = "${LABELS.REVIEW}" ORDER BY created ASC`, ['summary', 'labels', 'status', 'issuelinks', 'created']).catch(() => []),
   ]);
   const agreements = loaded.map((a) => evaluate(a, today));
   agreements.sort((a, b) => (a.invalid ? 1 : 0) - (b.invalid ? 1 : 0) || a.daysLeft - b.daysLeft);
@@ -1290,15 +1308,7 @@ async function computeBoard(client, { asUser }) {
   });
   const base = cfg?.baseUrl || (await siteBase(client).catch(() => ''));
   const visibleIds = new Set(agreements.map((a) => String(a.issueId)));
-  const agreementKeys = new Set(agreements.map((a) => a.issueKey));
-  const openReviewByAgreement = new Map();
-  for (const i of reviewIssues) {
-    if (i.statusCategory === 'done') continue;
-    for (const l of i.links || []) {
-      if (!agreementKeys.has(l.key) || openReviewByAgreement.has(l.key)) continue;
-      openReviewByAgreement.set(l.key, { issueKey: i.key, url: browse(base, i.key) });
-    }
-  }
+  const openReviewByAgreement = await loadOpenReviewsByAgreement(client, agreements.map((a) => a.issueKey), base);
   for (const a of agreements) {
     const r = openReviewByAgreement.get(a.issueKey);
     if (r) a.openReview = r;

@@ -302,3 +302,32 @@ test('boardData links an open review on Due and Upcoming agreements', async () =
   assert.equal(l.status, 'UPCOMING');
   assert.equal(l.openReview.issueKey, made.issueKey);
 });
+
+
+test('list-upcoming-notices includes openReview so the agent can preview reuse vs create', async () => {
+  site = fakeSite();
+  await actions.installed({});
+  const r = await actions.listUpcomingNotices({ days: 365 });
+  const helios = r.agreements.find((a) => a.vendor === 'Helios Payroll');
+  const larkspur = r.agreements.find((a) => a.vendor === 'Larkspur Facilities');
+  const northwind = r.agreements.find((a) => a.vendor === 'Northwind Analytics');
+  assert.ok(helios.openReview?.issueKey, helios);
+  assert.equal(helios.escalations.length, 1);
+  const review = labelled('fides-review').find((i) => i.links.includes(issueOf('Helios Payroll').key));
+  assert.equal(helios.openReview.issueKey, review.key);
+  assert.equal(larkspur.openReview, null);
+  assert.equal(northwind.openReview, null);
+
+  const rec = await store.get(`agreement:${issueOf('Larkspur Facilities').id}`);
+  const made = await svc.ensureReviewIssue(site.client, rec);
+  const again = await actions.listUpcomingNotices({ days: 365 });
+  assert.equal(again.agreements.find((a) => a.vendor === 'Larkspur Facilities').openReview.issueKey, made.issueKey);
+});
+
+test('the agent prompt tells the agent to preview reuse vs create before CREATE actions', async () => {
+  const { readFileSync } = await import('node:fs');
+  const prompt = readFileSync(new URL('../static/agent/prompt.txt', import.meta.url), 'utf8');
+  assert.match(prompt, /already has escalation CLSD-40, so confirming will reuse it/);
+  assert.match(prompt, /already has review CLSD-41, so confirming will reuse it/);
+  assert.match(prompt, /Before calling create-review-issue or escalate-threatened-milestones/);
+});
