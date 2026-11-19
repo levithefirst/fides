@@ -332,6 +332,7 @@ test('the agent prompt tells the agent to preview reuse vs create before CREATE 
   assert.match(prompt, /Before calling create-review-issue or escalate-threatened-milestones/);
   assert.match(prompt, /Agreement: CLSD-37 Larkspur Facilities\. Review: CLSD-45 \(reused, no duplicate created\)/);
   assert.match(prompt, /Do not start with "Using CLSD-\.\.\."/);
+  assert.match(prompt, /Do not add the Jira issue title or status after the key/);
 });
 
 
@@ -339,11 +340,14 @@ test('create-review-issue summary labels agreement vs review, reused or created'
   site = fakeSite();
   await actions.installed({});
   const helios = await actions.createReviewIssueAction({ agreement: 'Helios Payroll' });
-  assert.match(helios.summary, /^Agreement: .* Helios Payroll\. Review: .* \(reused, no duplicate created\)\.$/);
+  assert.match(helios.summary, /^Agreement: .* Helios Payroll\. Review: .* \(reused, no duplicate created\)\./);
+  assert.doesNotMatch(helios.summary, /Review: CLSD-\d+: Review:/);
+  assert.doesNotMatch(helios.summary, / Open\.$/);
   assert.equal(helios.summary, helios.note);
   assert.doesNotMatch(helios.summary, /^Using /);
   const north = await actions.createReviewIssueAction({ agreement: 'Northwind Analytics' });
-  assert.match(north.summary, /^Agreement: .* Northwind Analytics\. Review: .* \(created\)\.$/);
+  assert.match(north.summary, /^Agreement: .* Northwind Analytics\. Review: .* \(created\)\./);
+  assert.doesNotMatch(north.summary, /Review: CLSD-\d+: Review:/);
   assert.equal(north.created, true);
 });
 

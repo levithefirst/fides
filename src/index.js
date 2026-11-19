@@ -364,7 +364,13 @@ export async function createReviewIssueAction(payload) {
     const { a, resolved, ...miss } = resolveForAction(agreements, payload);
     if (!a) return { ...miss, disclaimer: DISCLAIMER };
     const r = await svc.ensureReviewIssue(client, a, { reason: 'requested in Rovo Chat' });
-    const summary = reviewResultLine({ issueKey: a.issueKey, vendor: a.vendor, reviewKey: r.issueKey, created: r.created });
+    const summary = reviewResultLine({
+      issueKey: a.issueKey,
+      vendor: a.vendor,
+      reviewKey: r.issueKey,
+      created: r.created,
+      reviewTitle: r.summary,
+    });
     return {
       resolved,
       created: r.created,

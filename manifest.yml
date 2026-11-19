@@ -79,7 +79,7 @@ modules:
           description: The vendor name exactly as the user said it (for example Northwind Analytics). Use an issue key only if the user typed one. Never guess a key.
 
     - key: escalate-threatened-milestones
-      name: Escalate threatened milestones (create or reuse)
+      name: Create or reuse escalation
       function: action-escalate
       actionVerb: CREATE
       description: |

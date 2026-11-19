@@ -1,6 +1,6 @@
 {
   "name": "fides",
-  "version": "2.10.0",
+  "version": "2.11.0",
   "private": true,
   "description": "Fides: Forge app for Jira, Confluence and Rovo that tracks agreement notice windows and escalates threatened milestones.",
   "license": "Apache-2.0",

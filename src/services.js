@@ -369,15 +369,15 @@ export async function healReviewNoticePages(client) {
 export async function ensureReviewIssue(client, agreement, { reason = 'notice window', fresh = false } = {}) {
   const base = await siteBase(client);
   const reviewKey = store.keys.review(agreement.issueId);
-  const adoptOpen = async (issueKey, extra = {}) => {
-    await store.set(reviewKey, { issueKey, at: new Date().toISOString(), adopted: true, ...extra });
-    return { created: false, issueKey, url: browse(base, issueKey) };
+  const adoptOpen = async (issueKey, summary) => {
+    await store.set(reviewKey, { issueKey, at: new Date().toISOString(), adopted: true });
+    return { created: false, issueKey, url: browse(base, issueKey), summary };
   };
   const existing = await store.get(reviewKey);
   if (existing?.issueKey) {
     try {
       const i = await jira.getIssue(client, existing.issueKey);
-      if (i.statusCategory !== 'done') return { created: false, issueKey: i.key, url: browse(base, i.key) };
+      if (i.statusCategory !== 'done') return { created: false, issueKey: i.key, url: browse(base, i.key), summary: i.summary };
     } catch (e) {
       if (!e.notFound) throw e;
     }
@@ -388,13 +388,13 @@ export async function ensureReviewIssue(client, agreement, { reason = 'notice wi
   // have a review yet, and judge mode's cold start stays fast.)
   const linkedReviews = fresh ? [] : await findLinkedWithLabel(client, agreement.issueKey, LABELS.REVIEW).catch(() => []);
   const openReview = linkedReviews.find((r) => r.statusCategory !== 'done');
-  if (openReview) return adoptOpen(openReview.key);
+  if (openReview) return adoptOpen(openReview.key, openReview.summary);
 
   const won = await store.claim(reviewKey, { state: 'creating', at: new Date().toISOString() }, store.CLAIM_TTL_SECONDS);
   if (!won) {
     const again = fresh ? [] : await findLinkedWithLabel(client, agreement.issueKey, LABELS.REVIEW).catch(() => []);
     const open = again.find((r) => r.statusCategory !== 'done');
-    if (open) return adoptOpen(open.key);
+    if (open) return adoptOpen(open.key, open.summary);
     const latest = await store.get(reviewKey);
     if (latest?.issueKey) return { created: false, issueKey: latest.issueKey, url: browse(base, latest.issueKey) };
     return { created: false, issueKey: null, pending: true };
@@ -418,7 +418,7 @@ export async function ensureReviewIssue(client, agreement, { reason = 'notice wi
     const types = await jira.linkTypeNames(client);
     await jira.linkIssues(client, types.relates, issue.key, agreement.issueKey).catch(() => {});
     await store.set(reviewKey, { issueKey: issue.key, at: new Date().toISOString(), notify: issue.notify });
-    return { created: true, issueKey: issue.key, url: browse(base, issue.key), notify: issue.notify };
+    return { created: true, issueKey: issue.key, url: browse(base, issue.key), notify: issue.notify, summary: `Review: ${agreement.vendor} notice by ${shortDate(ev.noticeBy)} (renew, cancel or renegotiate)` };
   } catch (e) {
     await store.del(reviewKey).catch(() => {});
     throw e;
@@ -454,13 +454,57 @@ export function withContractPageLink(description, url) {
   return { type: 'doc', version: 1, content };
 }
 
-export async function healEscalationContractPage(client, issueKey, url) {
-  if (!issueKey || !url) return { updated: false };
+// Escalation descriptions say "(status: open)" for an unresolved blocker,
+// matching the board's "Open blocker" wording, instead of freezing a
+// site-specific name such as "To Do" that may disagree with "Open".
+const BLOCKER_STATUS = /\(status:\s*[^)]+\)/;
+const BLOCKER_STATUS_OPEN = '(status: open)';
+
+export function needsBlockerStatusHeal(description) {
+  const text = jira.adfText(description);
+  if (!/Blocker:/.test(text)) return false;
+  const hit = text.match(BLOCKER_STATUS);
+  return Boolean(hit && hit[0] !== BLOCKER_STATUS_OPEN);
+}
+
+function rewriteTextStatus(node) {
+  if (!node || typeof node !== 'object') return node;
+  if (node.type === 'text' && typeof node.text === 'string' && BLOCKER_STATUS.test(node.text)) {
+    return { ...node, text: node.text.replace(BLOCKER_STATUS, BLOCKER_STATUS_OPEN) };
+  }
+  if (Array.isArray(node.content)) {
+    return { ...node, content: node.content.map(rewriteTextStatus) };
+  }
+  return node;
+}
+
+export function withOpenBlockerStatus(description) {
+  const blocks = description?.type === 'doc' && Array.isArray(description.content) ? description.content : [];
+  const content = blocks.map((block) => (/^\s*Blocker:/.test(jira.adfText(block)) ? rewriteTextStatus(block) : block));
+  return { type: 'doc', version: 1, content };
+}
+
+export async function healEscalationIssue(client, issueKey, url) {
+  if (!issueKey) return { updated: false };
   const issue = await jira.getIssue(client, issueKey);
   if (!(issue.labels || []).includes(LABELS.ESCALATION)) return { updated: false, skipped: 'not-escalation' };
-  if (!needsContractPageHeal(issue.description, url)) return { updated: false };
-  await jira.updateIssue(client, issueKey, { description: withContractPageLink(issue.description, url) });
+  let description = issue.description;
+  let changed = false;
+  if (url && needsContractPageHeal(description, url)) {
+    description = withContractPageLink(description, url);
+    changed = true;
+  }
+  if (needsBlockerStatusHeal(description)) {
+    description = withOpenBlockerStatus(description);
+    changed = true;
+  }
+  if (!changed) return { updated: false };
+  await jira.updateIssue(client, issueKey, { description });
   return { updated: true, issueKey };
+}
+
+export async function healEscalationContractPage(client, issueKey, url) {
+  return healEscalationIssue(client, issueKey, url);
 }
 
 export async function pageUrlFromRemoteLinks(client, issueKey) {
@@ -481,17 +525,26 @@ export async function agreementPageUrl(client, agreement) {
 
 export async function healEscalationContractPages(client, agreements) {
   const list = (agreements || []).filter((a) => a?.issueId && a.issueKey);
-  if (!list.length) return { updated: 0 };
   const escalations = await loadEscalations(client).catch(() => []);
   let updated = 0;
+  const seen = new Set();
   for (const a of list) {
     const url = await agreementPageUrl(client, a);
-    if (!url) continue;
     for (const e of escalations) {
       if (String(e.agreementId) !== String(a.issueId) || !e.issueKey) continue;
-      const r = await healEscalationContractPage(client, e.issueKey, url).catch(() => ({ updated: false }));
+      seen.add(e.issueKey);
+      const r = await healEscalationIssue(client, e.issueKey, url).catch(() => ({ updated: false }));
       if (r.updated) updated += 1;
     }
+  }
+  // Jira is the source of truth: also heal any labelled escalation the store
+  // missed (status wording does not need a page URL).
+  const labelled = await jira.searchAll(client, `labels = "${LABELS.ESCALATION}" ORDER BY created ASC`, ['summary', 'labels', 'description']).catch(() => []);
+  for (const i of labelled) {
+    if (seen.has(i.key) || !(i.labels || []).includes(LABELS.ESCALATION)) continue;
+    if (!needsBlockerStatusHeal(i.description)) continue;
+    const r = await healEscalationIssue(client, i.key, null).catch(() => ({ updated: false }));
+    if (r.updated) updated += 1;
   }
   return { updated };
 }
@@ -562,7 +615,7 @@ export async function escalateAgreement(client, agreement, today, existing, { kn
           summary: escalationSummary(agreement, blocker, risk),
           description: adf.doc(
             adf.p(adf.strong(riskSentence(risk))),
-            adf.p(`Blocker: `, adf.link(`${blocker.key} ${blocker.summary || ''}`.trim(), browse(base, blocker.key) || blocker.key), ` (status: ${blocker.statusName || 'open'}).`),
+            adf.p(`Blocker: `, adf.link(`${blocker.key} ${blocker.summary || ''}`.trim(), browse(base, blocker.key) || blocker.key), ' (status: open).'),
             adf.p(`Agreement: `, adf.link(`${agreement.issueKey} ${agreement.vendor}`, browse(base, agreement.issueKey) || agreement.issueKey), `. Notice-by ${ev.noticeBy}, end date ${agreement.endDate}.`),
             contractPageParagraph(agreement.confluenceUrl),
             adf.p('Suggested next step: resolve or re-scope the blocker, or decide on renewal without it, before the date above.'),

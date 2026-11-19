@@ -118,3 +118,45 @@ test('heal uses the agreement remote link when the property has no page URL', as
   assert.match(desc(esc), /3866625/);
   assert.doesNotMatch(desc(esc), /not linked yet/);
 });
+
+test('new escalations describe an unresolved blocker as status: open, not To Do', async () => {
+  const site = fakeSite();
+  await svc.judgeModeSeed(site.client, 'install');
+  const esc = labelled(site, LABELS.ESCALATION)[0];
+  assert.match(desc(esc), /\(status: open\)/);
+  assert.doesNotMatch(desc(esc), /\(status: To Do\)/);
+});
+
+test('heal rewrites a frozen To Do blocker status to open, only on fides-escalation issues', async () => {
+  const site = fakeSite();
+  await svc.judgeModeSeed(site.client, 'install');
+  const esc = labelled(site, LABELS.ESCALATION)[0];
+  const agreement = labelled(site, LABELS.AGREEMENT).find((i) => i.summary.startsWith('Helios Payroll'));
+  esc.description = adf.doc(
+    adf.p('This open blocker may put the notice date of 24 Nov at risk.'),
+    adf.p('Blocker: ', adf.link('CLSD-39 Approval pending', 'https://example.atlassian.net/browse/X-2'), ' (status: To Do).'),
+    adf.p('Contract page: already linked.')
+  );
+  agreement.description = adf.doc(adf.p('Blocker: something (status: To Do).'));
+  const size = site.issues.size;
+  const r = await svc.healEscalationIssue(site.client, esc.key, null);
+  assert.equal(r.updated, true);
+  assert.match(desc(esc), /\(status: open\)/);
+  assert.doesNotMatch(desc(esc), /\(status: To Do\)/);
+  assert.match(desc(agreement), /\(status: To Do\)/, 'agreement issue was not rewritten');
+  const again = await svc.healEscalationIssue(site.client, esc.key, null);
+  assert.equal(again.updated, false);
+  assert.equal(site.issues.size, size);
+  const skipped = await svc.healEscalationIssue(site.client, agreement.key, null);
+  assert.equal(skipped.skipped, 'not-escalation');
+});
+
+test('opening the board heals a stale To Do blocker status on the escalation', async () => {
+  const site = fakeSite();
+  await svc.judgeModeSeed(site.client, 'install');
+  const esc = labelled(site, LABELS.ESCALATION)[0];
+  esc.description = adf.doc(adf.p('Blocker: X-2 Approval pending (status: To Do).'));
+  await svc.boardData(site.client, { asUser: true });
+  assert.match(desc(esc), /\(status: open\)/);
+  assert.doesNotMatch(desc(esc), /\(status: To Do\)/);
+});
