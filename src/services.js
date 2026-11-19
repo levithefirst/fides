@@ -376,6 +376,75 @@ export async function ensureReviewIssue(client, agreement, { reason = 'notice wi
 
 // ---------- threatened-milestone escalation ----------
 
+// Rewrite the "Contract page:" line on a Fides escalation issue when the
+// agreement now has a Confluence URL. Idempotent: no write if the line
+// already links that URL. Never touches non-escalation issues.
+export function contractPageParagraph(url) {
+  return url ? adf.p('Contract page: ', adf.link(url, url)) : adf.p('Contract page: not linked yet.');
+}
+
+export function needsContractPageHeal(description, url) {
+  if (!url) return false;
+  const text = jira.adfText(description);
+  return text.includes('Contract page: not linked yet') || !text.includes(url);
+}
+
+export function withContractPageLink(description, url) {
+  const blocks = description?.type === 'doc' && Array.isArray(description.content) ? description.content : [];
+  let replaced = false;
+  const content = blocks.map((block) => {
+    if (/^\s*Contract page:/.test(jira.adfText(block))) {
+      replaced = true;
+      return contractPageParagraph(url);
+    }
+    return block;
+  });
+  if (!replaced) content.push(contractPageParagraph(url));
+  return { type: 'doc', version: 1, content };
+}
+
+export async function healEscalationContractPage(client, issueKey, url) {
+  if (!issueKey || !url) return { updated: false };
+  const issue = await jira.getIssue(client, issueKey);
+  if (!(issue.labels || []).includes(LABELS.ESCALATION)) return { updated: false, skipped: 'not-escalation' };
+  if (!needsContractPageHeal(issue.description, url)) return { updated: false };
+  await jira.updateIssue(client, issueKey, { description: withContractPageLink(issue.description, url) });
+  return { updated: true, issueKey };
+}
+
+export async function pageUrlFromRemoteLinks(client, issueKey) {
+  if (!issueKey) return null;
+  const links = await jira.getRemoteLinks(client, issueKey).catch(() => []);
+  const hit = links.find((l) => {
+    const url = l.object?.url || l.url || '';
+    return /\/wiki\//.test(url) || /\/pages\/\d+/.test(url);
+  });
+  return hit?.object?.url || hit?.url || null;
+}
+
+export async function agreementPageUrl(client, agreement) {
+  if (agreement?.confluenceUrl) return agreement.confluenceUrl;
+  if (!agreement?.issueKey) return null;
+  return pageUrlFromRemoteLinks(client, agreement.issueKey);
+}
+
+export async function healEscalationContractPages(client, agreements) {
+  const list = (agreements || []).filter((a) => a?.issueId && a.issueKey);
+  if (!list.length) return { updated: 0 };
+  const escalations = await loadEscalations(client).catch(() => []);
+  let updated = 0;
+  for (const a of list) {
+    const url = await agreementPageUrl(client, a);
+    if (!url) continue;
+    for (const e of escalations) {
+      if (String(e.agreementId) !== String(a.issueId) || !e.issueKey) continue;
+      const r = await healEscalationContractPage(client, e.issueKey, url).catch(() => ({ updated: false }));
+      if (r.updated) updated += 1;
+    }
+  }
+  return { updated };
+}
+
 // `knownBlockers` / `fresh` let judge mode skip lookups for issues it has
 // just created; every other caller discovers blockers from Jira.
 export async function escalateAgreement(client, agreement, today, existing, { knownBlockers = null, fresh = false } = {}) {
@@ -390,7 +459,11 @@ export async function escalateAgreement(client, agreement, today, existing, { kn
     const k = escalationKey(agreement.issueId, b.id);
     if (existing.has(k)) {
       const v = await store.get(k);
-      if (v?.issueKey) out.existing.push({ issueKey: v.issueKey, blockerKey: b.key });
+      if (v?.issueKey) {
+        out.existing.push({ issueKey: v.issueKey, blockerKey: b.key });
+        const url = await agreementPageUrl(client, agreement);
+        if (url) await healEscalationContractPage(client, v.issueKey, url).catch(() => {});
+      }
     }
   }
   if (!plans.length) return out;
@@ -416,9 +489,7 @@ export async function escalateAgreement(client, agreement, today, existing, { kn
             adf.p(adf.strong(riskSentence(risk))),
             adf.p(`Blocker: `, adf.link(`${blocker.key} ${blocker.summary || ''}`.trim(), browse(base, blocker.key) || blocker.key), ` (status: ${blocker.statusName || 'open'}).`),
             adf.p(`Agreement: `, adf.link(`${agreement.issueKey} ${agreement.vendor}`, browse(base, agreement.issueKey) || agreement.issueKey), `. Notice-by ${ev.noticeBy}, end date ${agreement.endDate}.`),
-            ...(agreement.confluenceUrl
-              ? [adf.p('Contract page: ', adf.link(agreement.confluenceUrl, agreement.confluenceUrl))]
-              : [adf.p('Contract page: not linked yet.')]),
+            contractPageParagraph(agreement.confluenceUrl),
             adf.p('Suggested next step: resolve or re-scope the blocker, or decide on renewal without it, before the date above.'),
             adf.p(adf.em(DISCLAIMER))
           ),
@@ -435,6 +506,9 @@ export async function escalateAgreement(client, agreement, today, existing, { kn
                 .catch(() => {})
             : null,
         ]);
+      } else {
+        const url = await agreementPageUrl(client, agreement);
+        if (url) await healEscalationContractPage(client, issueKey, url).catch(() => {});
       }
       await store.set(plan.key, {
         state: 'done',
@@ -491,6 +565,7 @@ export async function runScan(client, source, { writeClient = null } = {}) {
     // Escalations first: they are the time-critical signal.
     const esc = await escalateAll(client, agreements, today);
     stamp.escalationsCreated = esc.created.length;
+    await healEscalationContractPages(client, agreements).catch(() => {});
     stamp.errors.push(...esc.errors);
     for (const a of agreements.map((x) => evaluate(x, today))) {
       if (a.invalid || a.status !== STATUS.DUE || !a.issueKey) continue;
@@ -692,7 +767,12 @@ export async function linkAgreementPage(client, agreement, pageId, url) {
   for (const e of await loadEscalations(client).catch(() => [])) {
     if (String(e.agreementId) === String(agreement.issueId) && e.issueKey) related.push(e.issueKey);
   }
-  await Promise.all([...new Set(related)].map((key) => jira.addRemoteLink(client, key, url, title, gid).catch(() => {})));
+  await Promise.all(
+    [...new Set(related)].map(async (key) => {
+      await jira.addRemoteLink(client, key, url, title, gid).catch(() => {});
+      await healEscalationContractPage(client, key, url).catch(() => {});
+    })
+  );
   const fresh = (await store.get(store.keys.agreement(agreement.issueId))) || agreement;
   const saved = await store.saveAgreement({ ...fresh, confluencePageId: String(pageId), confluenceUrl: url });
   await store.set(store.keys.pageAgreement(pageId), { issueId: saved.issueId });
@@ -1034,6 +1114,7 @@ export async function recordPaint({ ms, source, agreements }) {
 
 export async function boardData(client, { asUser, accountId = null } = {}) {
   const board = await computeBoard(client, { asUser });
+  await healEscalationContractPages(client, board.agreements).catch(() => {});
   await saveSnapshot(accountId, board);
   return board;
 }

@@ -171,6 +171,13 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
         i.properties = { ...(i.properties || {}), [m[2]]: body };
         return json(200, {});
       }
+      if ((m = /^\/rest\/api\/3\/issue\/([^/?]+)$/.exec(p)) && method === 'PUT') {
+        const i = issues.get(m[1]) || [...issues.values()].find((x) => x.id === m[1]);
+        if (!i) return json(404, { errorMessages: ['Issue does not exist'] });
+        if (body.fields?.description !== undefined) i.description = body.fields.description;
+        if (body.fields?.summary !== undefined) i.summary = body.fields.summary;
+        return json(204);
+      }
       if ((m = /^\/rest\/api\/3\/issue\/([^/?]+)$/.exec(p)) && method === 'DELETE') {
         issues.delete(m[1]);
         return json(204);

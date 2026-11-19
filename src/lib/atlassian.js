@@ -118,6 +118,10 @@ export async function createIssue(client, { projectId, issueTypeId, summary, des
   }
 }
 
+export async function updateIssue(client, issueKey, fields) {
+  await call(client, 'jira', route`/rest/api/3/issue/${issueKey}`, { method: 'PUT', body: { fields } });
+}
+
 // What the caller may do (read:jira-work). Returns { KEY: boolean }.
 export async function myPermissions(client, projectKey, keys) {
   const res = await call(client, 'jira', route`/rest/api/3/mypermissions?projectKey=${projectKey}&permissions=${keys.join(',')}`);
@@ -149,7 +153,7 @@ export async function getIssue(client, issueIdOrKey) {
   const res = await call(
     client,
     'jira',
-    route`/rest/api/3/issue/${issueIdOrKey}?fields=summary,status,labels,issuelinks,project,issuetype,assignee`
+    route`/rest/api/3/issue/${issueIdOrKey}?fields=summary,status,labels,issuelinks,project,issuetype,assignee,description`
   );
   return normaliseIssue(res);
 }
@@ -165,6 +169,7 @@ export function adfText(node) {
 
 export function normaliseIssue(i) {
   return {
+    description: i.fields?.description || null,
     descriptionText: i.fields?.description ? adfText(i.fields.description).trim() : '',
     properties: i.properties || {},
     created: i.fields?.created || null,

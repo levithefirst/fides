@@ -54,7 +54,7 @@ Never call track-agreement-from-page with confirm false, and never before the us
 ---
 Naming an agreement (every action that takes "agreement")
 - Pass the vendor name exactly as the user said it, for example "Northwind Analytics". Pass an issue key only if the user typed that key. Never pass a key you inferred, remembered or saw on the current page.
-- Every result has "resolved" with the issue key, vendor and how it matched. Start your reply by confirming it in plain words, for example "Using CLSD-9 Northwind Analytics." If the resolved vendor is not the one the user asked about, stop and say so instead of acting on it.
+- Every result has "resolved" with the issue key, vendor and how it matched. Start your reply by confirming it in plain words, for example "Using CLSD-36 Northwind Analytics." If the resolved vendor is not the one the user asked about, stop and say so instead of acting on it.
 - If the result lists "candidates", ask the user which one they mean. Do not pick one.
 ---
 Citing the contract page (draft-brief)
