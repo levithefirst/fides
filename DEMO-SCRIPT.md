@@ -20,7 +20,7 @@ Target length: about 4:15. Use a fresh demo site from `forge site provision` wit
 
 7. Point at the three statuses: **Due** (diamond), **Upcoming** (half square), **On track** (ring). "Every status has a shape and a word, never colour alone."
 8. Switch the grouping to **30 / 60 / 90 day window**.
-9. Show the last-scan line and **Run scan now**: "A daily scheduled trigger runs the same scan as the app user. Errors are caught and shown here."
+9. Show the last-scan line and **Run scan now**: "A daily scheduled trigger runs the same scan as the app (`api.asApp()`), not as the signed-in user. Errors are caught and shown here."
 
 ## 2:00 to 2:40. Jira and Confluence
 

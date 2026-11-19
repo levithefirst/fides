@@ -6,7 +6,7 @@
 
 Fides (FY-deez) is a Forge app for Jira, Confluence and Rovo. It is for legal, procurement, finance, ITAM/SAM and ops teams who already work in Jira and Confluence and who track vendor and SaaS agreements in a spreadsheet, a calendar reminder, or not at all.
 
-Codegeist 2026 · Track: **Apps for Business Teams** · Bonus: **Best Agents** (`rovo:agent` + four `action` modules)
+Codegeist 2026 · Track: **Apps for Business Teams** · Bonus: **Best Agents** (`rovo:agent` + six `action` modules)
 
 > Fides tracks dates and obligations; it is not legal advice.
 
@@ -55,7 +55,7 @@ The agent prompt (`static/agent/prompt.txt`) tells it to use only action data, h
 
 | Criterion (20% each) | How Fides meets it | Atlassian features used |
 | --- | --- | --- |
-| **Technological Implementation** | A real loop, not a single demo path: structured agreements, a shared status rule used by the board, scan and agent, idempotent escalation (KVS `FAIL_IF_EXISTS` claims plus Jira label guards), install-time and first-open seeding with a lock, permission-aware reads via bulk fetch, a deterministic contract-page parser, a validated 100-row import through the same create path as the form, owner notification with a three-step fallback, and a per-user snapshot for fast first paint. 130 tests in CI. | **Forge modules**: `jira:globalPage`, `jira:issuePanel`, `scheduledTrigger` (interval `day`, `api.asApp()`), `trigger` on `avi:forge:installed:app`, Key-Value Store (`@forge/kvs`). **Jira issues and links**: agreements, blockers, review and escalation issues, issue links, remote links. |
+| **Technological Implementation** | A real loop, not a single demo path: structured agreements, a shared status rule used by the board, scan and agent, idempotent escalation (KVS `FAIL_IF_EXISTS` claims plus Jira label guards), install-time and first-open seeding with a lock, permission-aware reads via bulk fetch, a deterministic contract-page parser, a validated 100-row import through the same create path as the form, owner notification with a three-step fallback, and a per-user snapshot for fast first paint. 145 tests in CI. | **Forge modules**: `jira:globalPage`, `jira:issuePanel`, `scheduledTrigger` (interval `day`, `api.asApp()`), `trigger` on `avi:forge:installed:app`, Key-Value Store (`@forge/kvs`). **Jira issues and links**: agreements, blockers, review and escalation issues, issue links, remote links. |
 | **Design** | Native UI Kit, ADS tokens, light and dark themes, colourblind-safe chips (shape plus label), 30/60/90 grouping, last-scan status, one Fides Umber accent. Every edge state is one plain sentence and one next step. The board paints from a cached snapshot ("Updated 4m ago, refreshing") and swaps in fresh data without a layout jump. Import shows a preview with per-row errors before anything is created. | UI Kit (`render: native`, `UserPicker`, `DynamicTable`), ADS tokens, Rovo bridge `rovo.open` from the board. |
 | **Potential Impact** | Missed notice periods and auto-renewals are a named cause of value leakage (see Evidence). Fides puts the date, the obligation and the blocker in the tools these teams already use, and acts before the window closes. Teams get started fast: paste their existing spreadsheet, or track a contract straight from its Confluence page. The owner hears about it through Jira itself: review and escalation issues are assigned to them and they are added as a watcher. | **Jira issues** as the system of record (assignee and watchers drive Jira's own notifications), **Confluence contract pages** as the source of terms. |
 | **Innovation / Idea** | Connects contract dates to live work: an open blocker issue threatening a notice date triggers a hedged escalation automatically and through the agent. The agent can also turn a contract page into a tracked agreement, quoting each clause it relied on. | **Rovo agent + actions**: `rovo:agent` with five `action` modules (`GET`, `CREATE`). **Confluence**: contract pages read as the user for the brief and for track-from-page. |
@@ -158,7 +158,7 @@ The full deploy, provisioning, Sharing and submission checklist is in [`docs/HAN
 ```
 manifest.yml
 src/
-  index.js            Forge handlers: UI resolver, install trigger, daily scan, 4 Rovo actions
+  index.js            Forge handlers: UI resolver, install trigger, daily scan, 6 Rovo actions
   services.js         Core loop: agreements, blockers, review issues, escalation, scan, judge mode, board data
   lib/dates.js        Notice-by and Due / Upcoming / On track rules (single source of truth)
   lib/escalation.js   Blocker open check, RED window, idempotency keys, hedged wording
@@ -179,7 +179,7 @@ scripts/              Manifest validation and a live acceptance poll
 
 - People-facing paths (board, panel, Rovo actions) use `api.asUser()`, so they respect Jira and Confluence permissions.
 - Scheduled and install work uses `api.asApp()`, because scheduled triggers have no user.
-- Agreement issues live in Jira; structured dates and obligations live in the Forge Key-Value Store keyed by issue id. No custom issue type or custom field is needed. No external hosting.
+- Agreement issues in Jira are the source of truth: the `fides-agreement` issue property plus labels (`fides-agreement`, `fides-escalation`, `fides-review`, `fides-blocker`). The Forge Key-Value Store is a per-install cache hydrated from Jira; an empty store must never mean "no agreements". No custom issue type or custom field is needed. No external hosting.
 
 ## Scopes
 

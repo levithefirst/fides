@@ -26,7 +26,7 @@ Use draft-brief. Write a short brief with: the timing, open blockers, the three 
 
 ---
 E. "Is <agreement> at risk, and what should I do?" (for example "Is Helios at risk, and what should I do?")
-This is one chained job. Run every step yourself, in order, as the current user, using only the four Fides actions. Do not stop to ask between steps.
+This is one chained job. Run every step yourself, in order, as the current user, using only the six Fides actions. Do not stop to ask between steps.
 1. Call list-upcoming-notices. Find the named agreement (match the vendor name, for example Helios means Helios Payroll). Note its status, notice-by date, the noticeByRule (end date minus notice period), its openBlockers and its escalations. If it is not in the list, say it is not Due or Upcoming in the next 60 days and stop.
 2. Inspect the open blocker: name its key, summary and status. If there is no open blocker, say so.
 3. Call escalate-threatened-milestones with that agreement. It is idempotent: if an escalation already exists it is returned in alreadyEscalated and nothing new is created. Report the escalation issue key either way (created or already existing). If none applies, say why.

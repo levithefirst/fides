@@ -10,7 +10,7 @@ Fluid submits. No agent submits or posts. Deadline: **Tue 22 Dec 2026, 9:00 PM W
 
 **Category:** Apps for Business Teams
 
-**Bonus prize:** Best Agents (Forge app with a `rovo:agent` module and four `action` modules)
+**Bonus prize:** Best Agents (Forge app with a `rovo:agent` module and six `action` modules)
 
 **Installation link:** `<SHARING INSTALL LINK>`
 
