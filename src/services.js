@@ -511,7 +511,7 @@ export async function escalateAgreement(client, agreement, today, existing, { kn
     if (existing.has(k)) {
       const v = await store.get(k);
       if (v?.issueKey) {
-        out.existing.push({ issueKey: v.issueKey, blockerKey: b.key });
+        out.existing.push({ issueKey: v.issueKey, blockerKey: b.key, agreementKey: agreement.issueKey, vendor: agreement.vendor });
         const url = await agreementPageUrl(client, agreement);
         if (url) await healEscalationContractPage(client, v.issueKey, url).catch(() => {});
       }
@@ -542,7 +542,7 @@ export async function escalateAgreement(client, agreement, today, existing, { kn
           at: new Date().toISOString(),
         });
         existing.add(plan.key);
-        out.existing.push({ issueKey, blockerKey: plan.blocker.key });
+        out.existing.push({ issueKey, blockerKey: plan.blocker.key, agreementKey: agreement.issueKey, vendor: agreement.vendor });
         const url = await agreementPageUrl(client, agreement);
         if (url) await healEscalationContractPage(client, issueKey, url).catch(() => {});
       }
@@ -598,7 +598,7 @@ export async function escalateAgreement(client, agreement, today, existing, { kn
         at: new Date().toISOString(),
       });
       existing.add(plan.key);
-      out.created.push({ issueKey, url: browse(base, issueKey), blockerKey: plan.blocker.key, sentence: riskSentence(plan.risk), notify });
+      out.created.push({ issueKey, url: browse(base, issueKey), blockerKey: plan.blocker.key, sentence: riskSentence(plan.risk), notify, agreementKey: agreement.issueKey, vendor: agreement.vendor });
     } catch (e) {
       // Release the claim so the next run can retry.
       await store.del(plan.key).catch(() => {});

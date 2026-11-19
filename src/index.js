@@ -14,6 +14,7 @@ import * as jira from './lib/atlassian.js';
 import { todayIso, upcomingNotices, DEFAULT_LOOKAHEAD_DAYS, shortDate } from './lib/dates.js';
 import { draftBrief, storageToText, DISCLAIMER } from './lib/brief.js';
 import { matchAgreement, confirmation, isAllAgreementsRef } from './lib/match.js';
+import { reviewResultLine, escalationResultLine } from './lib/resultLines.js';
 
 const friendly = (e) => {
   if (e instanceof jira.ApiError && e.noCreate) return 'You do not have permission to create issues in that Jira project.';
@@ -363,13 +364,15 @@ export async function createReviewIssueAction(payload) {
     const { a, resolved, ...miss } = resolveForAction(agreements, payload);
     if (!a) return { ...miss, disclaimer: DISCLAIMER };
     const r = await svc.ensureReviewIssue(client, a, { reason: 'requested in Rovo Chat' });
+    const summary = reviewResultLine({ issueKey: a.issueKey, vendor: a.vendor, reviewKey: r.issueKey, created: r.created });
     return {
       resolved,
       created: r.created,
       reviewIssue: r.issueKey,
       url: r.url,
       agreement: `${a.issueKey} ${a.vendor}`,
-      note: r.created ? 'Review issue created and linked to the agreement.' : 'An open review issue already exists; no duplicate was created.',
+      summary,
+      note: summary,
       disclaimer: DISCLAIMER,
     };
   } catch (e) {
@@ -396,17 +399,20 @@ export async function escalateThreatenedMilestones(payload) {
       resolved = res.resolved;
     }
     const r = await svc.escalateAll(client, scope);
+    const items = [
+      ...r.created.map((e) => ({ issueKey: e.agreementKey, vendor: e.vendor, escalationKey: e.issueKey, created: true })),
+      ...r.existing.map((e) => ({ issueKey: e.agreementKey, vendor: e.vendor, escalationKey: e.issueKey, created: false })),
+    ];
+    const summary = items.length
+      ? escalationResultLine(items)
+      : 'No open blockers threaten a date in the next 14 days.';
     return {
       ...(resolved ? { resolved } : {}),
       rule: 'An escalation is created once per agreement and blocker when the blocker is still open and the notice-by or milestone date is within 14 days or past.',
       created: r.created,
       alreadyEscalated: r.existing,
       errors: r.errors,
-      summary: r.created.length
-        ? `${r.created.length} escalation issue(s) created.`
-        : r.existing.length
-          ? 'Threatened milestones were already escalated; no duplicates created.'
-          : 'No open blockers threaten a date in the next 14 days.',
+      summary,
       disclaimer: DISCLAIMER,
     };
   } catch (e) {

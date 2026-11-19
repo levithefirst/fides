@@ -330,4 +330,26 @@ test('the agent prompt tells the agent to preview reuse vs create before CREATE 
   assert.match(prompt, /already has escalation CLSD-40, so confirming will reuse it/);
   assert.match(prompt, /already has review CLSD-41, so confirming will reuse it/);
   assert.match(prompt, /Before calling create-review-issue or escalate-threatened-milestones/);
+  assert.match(prompt, /Agreement: CLSD-37 Larkspur Facilities\. Review: CLSD-45 \(reused, no duplicate created\)/);
+  assert.match(prompt, /Do not start with "Using CLSD-\.\.\."/);
+});
+
+
+test('create-review-issue summary labels agreement vs review, reused or created', async () => {
+  site = fakeSite();
+  await actions.installed({});
+  const helios = await actions.createReviewIssueAction({ agreement: 'Helios Payroll' });
+  assert.match(helios.summary, /^Agreement: .* Helios Payroll\. Review: .* \(reused, no duplicate created\)\.$/);
+  assert.equal(helios.summary, helios.note);
+  assert.doesNotMatch(helios.summary, /^Using /);
+  const north = await actions.createReviewIssueAction({ agreement: 'Northwind Analytics' });
+  assert.match(north.summary, /^Agreement: .* Northwind Analytics\. Review: .* \(created\)\.$/);
+  assert.equal(north.created, true);
+});
+
+test('escalate-threatened-milestones summary labels agreement vs escalation', async () => {
+  site = fakeSite();
+  await actions.installed({});
+  const r = await actions.escalateThreatenedMilestones({ agreement: 'Helios Payroll' });
+  assert.match(r.summary, /^Agreement: .* Helios Payroll\. Escalation: .* \(reused, no duplicate created\)\.$/);
 });
