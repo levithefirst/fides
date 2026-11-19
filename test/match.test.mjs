@@ -2,7 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { matchAgreement, confirmation } from '../src/lib/match.js';
+import { matchAgreement, confirmation, isAllAgreementsRef } from '../src/lib/match.js';
 
 const A = [
   { issueId: '10007', issueKey: 'CLSD-7', vendor: 'Helios Payroll', summary: 'Helios Payroll agreement (sample): notice by 2026-11-21' },
@@ -53,4 +53,13 @@ test('ambiguous or unknown names are never guessed', () => {
 test('confirmation line names the resolved key', () => {
   const m = matchAgreement(A, 'Northwind Analytics', 'CLSD-7');
   assert.equal(confirmation('Northwind Analytics', m), 'Resolved "Northwind Analytics" to CLSD-9 Northwind Analytics (matched by exact name).');
+});
+
+
+test('isAllAgreementsRef treats empty, all, and all agreements the same', () => {
+  for (const v of [undefined, null, '', '  ', 'all', 'ALL', 'all agreements', 'All Agreements']) {
+    assert.equal(isAllAgreementsRef(v), true, String(v));
+  }
+  assert.equal(isAllAgreementsRef('Helios Payroll'), false);
+  assert.equal(isAllAgreementsRef('all vendors'), false);
 });

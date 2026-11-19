@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import ForgeReconciler, { Link, SectionMessage, Spinner, Stack, Inline, Text } from '@forge/react';
-import { invoke } from '@forge/bridge';
+import { invoke, requestJira, view } from '@forge/bridge';
 import { StatusChip, Footer } from './components';
+import { todayIso } from '../lib/dates.js';
+import { panelPeekFromProperty } from '../lib/panelPeek.js';
 
 const ROLE = {
   agreement: null,
@@ -11,10 +13,39 @@ const ROLE = {
   linked: 'Linked to a Fides agreement.',
 };
 
+async function peekFromIssue() {
+  try {
+    const ctx = await view.getContext();
+    const key = ctx?.extension?.issue?.key;
+    if (!key) return null;
+    const res = await requestJira(`/rest/api/3/issue/${encodeURIComponent(key)}/properties/fides-agreement`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    const body = await res.json();
+    return panelPeekFromProperty(body?.value, todayIso());
+  } catch {
+    return null;
+  }
+}
+
 function Panel() {
   const [d, setD] = useState(null);
   useEffect(() => {
-    invoke('getPanel').then(setD).catch(() => setD({ kind: 'error' }));
+    let cancelled = false;
+    peekFromIssue().then((peek) => {
+      if (!cancelled && peek) setD((cur) => cur && !cur.fromPeek ? cur : peek);
+    });
+    invoke('getPanel')
+      .then((full) => {
+        if (!cancelled) setD(full);
+      })
+      .catch(() => {
+        if (!cancelled) setD((cur) => (cur ? cur : { kind: 'error' }));
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
   if (!d) return <Spinner label="Loading Fides status" />;
   if (d.kind === 'error') {

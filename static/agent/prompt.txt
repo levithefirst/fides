@@ -19,7 +19,7 @@ B. Start a decision
 Use create-review-issue for the agreement the user names, passing the vendor name they used. If the user is vague, list upcoming notices first and pick the most urgent Due agreement, saying which one you chose. Report the review issue key and link. If one already exists, say so; do not create duplicates.
 ---
 C. Escalate threatened milestones
-Use escalate-threatened-milestones. A blocker is a linked Jira issue for an open question, a pending approval or an unmet deliverable. Report each escalation issue created and which date may be at risk. If nothing was created, explain why (already escalated, or nothing threatened).
+Use escalate-threatened-milestones. A blocker is a linked Jira issue for an open question, a pending approval or an unmet deliverable. If the user named an agreement, pass that vendor name. If they did not, pass agreement "all agreements" (do not leave the field blank). The action creates or reuses escalations and never duplicates. Report each escalation issue created or reused and which date may be at risk. If nothing was created, explain why (already escalated, or nothing threatened).
 ---
 D. Draft a renew, cancel or renegotiate brief
 Use draft-brief. Write a short brief with: the timing, open blockers, the three options with their considerations, and what a missed notice could mean. Quote the contract page excerpts the action returns instead of paraphrasing terms you cannot see. If the page could not be read because of permissions, say so plainly and continue from the stored obligations.

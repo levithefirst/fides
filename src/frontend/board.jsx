@@ -28,7 +28,7 @@ import ForgeReconciler, {
 } from '@forge/react';
 import { invoke, rovo } from '@forge/bridge';
 import { StatusChip, UmberRule, Footer, card } from './components';
-import { deriveBoardView, ROVO_NOTE } from '../lib/view.js';
+import { deriveBoardView, ROVO_NOTE, reviewAction } from '../lib/view.js';
 
 const AGENT = { type: 'forge', agentKey: 'fides-agent', agentName: 'Fides' };
 
@@ -65,6 +65,9 @@ function groupRows(agreements, mode) {
     { title: 'On track', items: agreements.filter((a) => a.status === 'ON_TRACK') },
   ];
 }
+
+const noticeByCell = xcss({ whiteSpace: 'nowrap' });
+const actionsCell = xcss({ minWidth: '0', whiteSpace: 'normal' });
 
 const HEAD = {
   cells: [
@@ -113,7 +116,9 @@ function AgreementTable({ items, base, escalatedIds, onReview, onLinkPage, busy 
         key: 'noticeBy',
         content: (
           <Stack space="space.025">
-            <Text>{a.noticeBy}</Text>
+            <Box xcss={noticeByCell}>
+              <Text>{String(a.noticeBy || '').replaceAll('-', '\u2011')}</Text>
+            </Box>
             <Text size="small" color="color.text.subtle">{`end ${a.endDate} minus ${a.noticeDays} days`}</Text>
           </Stack>
         ),
@@ -134,12 +139,26 @@ function AgreementTable({ items, base, escalatedIds, onReview, onLinkPage, busy 
       },
       {
         key: 'actions',
-        content:
-          a.status === 'DUE' ? (
-            <Button isDisabled={busy} onClick={() => onReview(a)}>
-              Create review
-            </Button>
-          ) : null,
+        content: (() => {
+          const action = reviewAction(a);
+          if (action.type === 'link') {
+            return (
+              <Box xcss={actionsCell}>
+                <Link href={action.url || browse(base, action.issueKey)}>{`Review ${action.issueKey}`}</Link>
+              </Box>
+            );
+          }
+          if (action.type === 'create') {
+            return (
+              <Box xcss={actionsCell}>
+                <Button isDisabled={busy} onClick={() => onReview(a)}>
+                  Create review
+                </Button>
+              </Box>
+            );
+          }
+          return null;
+        })(),
       },
     ],
   }));

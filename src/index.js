@@ -13,7 +13,7 @@ import * as store from './lib/store.js';
 import * as jira from './lib/atlassian.js';
 import { todayIso, upcomingNotices, DEFAULT_LOOKAHEAD_DAYS, shortDate } from './lib/dates.js';
 import { draftBrief, storageToText, DISCLAIMER } from './lib/brief.js';
-import { matchAgreement, confirmation } from './lib/match.js';
+import { matchAgreement, confirmation, isAllAgreementsRef } from './lib/match.js';
 
 const friendly = (e) => {
   if (e instanceof jira.ApiError && e.noCreate) return 'You do not have permission to create issues in that Jira project.';
@@ -380,10 +380,10 @@ export async function escalateThreatenedMilestones(payload) {
     const agreements = await svc.visibleAgreements(client, { asUser: true });
     let scope = agreements;
     let resolved = null;
-    // Only scope to one agreement when the caller named it. A bare Jira
-    // issue context (for example a blocker or a non-Fides issue) must not
-    // error or silently limit the run.
-    if (payload?.agreement != null && String(payload.agreement).trim() !== '') {
+    // Only scope to one agreement when the caller named a specific one.
+    // Empty, "all" and "all agreements" all mean scan every visible agreement
+    // (so the Rovo confirm card can show "all agreements" instead of "").
+    if (!isAllAgreementsRef(payload?.agreement)) {
       const res = resolveForAction(agreements, payload);
       if (!res.a) {
         const { a: _none, resolved: _r, ...miss } = res;

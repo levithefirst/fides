@@ -231,3 +231,74 @@ test('linkPageToAgreement writes KVS only after the remote link succeeds', async
   assert.equal(String(after.confluencePageId), String(page.id));
   assert.ok(site.issues.get(helios.key).remote.length >= 1);
 });
+
+test('escalate treats empty, "all" and "all agreements" the same, and still scopes a named vendor', async () => {
+  site = fakeSite();
+  await actions.installed({});
+  const blocker = labelled('fides-blocker')[0];
+  for (const agreement of [undefined, '', 'all', 'ALL', 'all agreements', 'All Agreements']) {
+    const r = await actions.escalateThreatenedMilestones({
+      agreement,
+      context: { jira: { issueKey: blocker.key } },
+    });
+    assert.equal(r.error, undefined, `${agreement}: ${r.error}`);
+    assert.equal(r.created.length, 0);
+    assert.ok(r.alreadyEscalated.length >= 1, String(agreement));
+  }
+  const miss = await actions.escalateThreatenedMilestones({ agreement: 'NoSuchVendor' });
+  assert.match(miss.error, /could not find an agreement matching "NoSuchVendor"/);
+  const hit = await actions.escalateThreatenedMilestones({ agreement: 'Helios Payroll' });
+  assert.equal(hit.resolved.vendor, 'Helios Payroll');
+});
+
+test('new review descriptions use the absolute notice-by date, not a frozen day count', async () => {
+  site = fakeSite();
+  const a = await dueAgreement();
+  const rev = await svc.ensureReviewIssue(site.client, a);
+  const ev = (await import('../src/lib/dates.js')).evaluate(a, (await import('../src/lib/dates.js')).todayIso());
+  const text = (await import('../src/lib/atlassian.js')).adfText(site.issues.get(rev.issueKey).description);
+  assert.match(text, new RegExp(`Notice-by date: ${ev.noticeBy}\\.`));
+  assert.doesNotMatch(text, /day\(s\) from today/);
+});
+
+test('healReviewNoticeWording rewrites a Fides review and is idempotent; it skips non-reviews', async () => {
+  site = fakeSite();
+  const a = await dueAgreement();
+  const rev = await svc.ensureReviewIssue(site.client, a);
+  const ev = (await import('../src/lib/dates.js')).evaluate(a, (await import('../src/lib/dates.js')).todayIso());
+  const { adf, adfText, updateIssue, getIssue } = await import('../src/lib/atlassian.js');
+  const stale = adf.doc(adf.p(`The notice window for ${a.vendor} is open (notice window). Notice-by date: ${ev.noticeBy}, 6 day(s) from today.`));
+  await updateIssue(site.client, rev.issueKey, { description: stale });
+  const first = await svc.healReviewNoticeWording(site.client, rev.issueKey);
+  assert.equal(first.updated, true);
+  const text = adfText((await getIssue(site.client, rev.issueKey)).description);
+  assert.match(text, new RegExp(`Notice-by date: ${ev.noticeBy}\\.`));
+  assert.doesNotMatch(text, /day\(s\) from today/);
+  const second = await svc.healReviewNoticeWording(site.client, rev.issueKey);
+  assert.equal(second.updated, false);
+  const skipped = await svc.healReviewNoticeWording(site.client, a.issueKey);
+  assert.equal(skipped.updated, false);
+  assert.equal(skipped.skipped, 'not-review');
+});
+
+test('boardData links an open review on Due and Upcoming agreements', async () => {
+  site = fakeSite();
+  await actions.installed({});
+  const helios = issueOf('Helios Payroll');
+  const larkspur = issueOf('Larkspur Facilities');
+  const first = await svc.boardData(site.client, { asUser: true });
+  const h = first.agreements.find((a) => a.issueKey === helios.key);
+  const l0 = first.agreements.find((a) => a.issueKey === larkspur.key);
+  assert.equal(h.status, 'DUE');
+  assert.ok(h.openReview?.issueKey, 'Helios seed review should appear');
+  assert.equal(labelled('fides-review').some((i) => i.key === h.openReview.issueKey), true);
+  assert.equal(l0.openReview, undefined);
+
+  const rec = await store.get(`agreement:${larkspur.id}`);
+  const made = await svc.ensureReviewIssue(site.client, rec);
+  assert.equal(made.created, true);
+  const second = await svc.boardData(site.client, { asUser: true });
+  const l = second.agreements.find((a) => a.issueKey === larkspur.key);
+  assert.equal(l.status, 'UPCOMING');
+  assert.equal(l.openReview.issueKey, made.issueKey);
+});

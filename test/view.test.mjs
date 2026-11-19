@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveBoardView, spotlightFor, WHY_LINE, ROVO_NOTE, CONFLUENCE_NOTE } from '../src/lib/view.js';
+import { deriveBoardView, spotlightFor, WHY_LINE, ROVO_NOTE, CONFLUENCE_NOTE, reviewAction } from '../src/lib/view.js';
 
 const helios = {
   issueId: '1', issueKey: 'CLSD-1', vendor: 'Helios Payroll', status: 'DUE', sample: true,
@@ -95,4 +95,19 @@ test('copy rules: no RFI, no em dash', () => {
     assert.doesNotMatch(allText(v), /\bRFI\b/);
     assert.doesNotMatch(allText(v), /\u2014/);
   }
+});
+
+test('reviewAction prefers an open review link over the create button', () => {
+  assert.deepEqual(reviewAction({ status: 'DUE', openReview: { issueKey: 'CLSD-41', url: 'https://example/browse/CLSD-41' } }), {
+    type: 'link',
+    issueKey: 'CLSD-41',
+    url: 'https://example/browse/CLSD-41',
+  });
+  assert.deepEqual(reviewAction({ status: 'DUE' }), { type: 'create' });
+  assert.deepEqual(reviewAction({ status: 'UPCOMING' }), { type: 'none' });
+  assert.deepEqual(reviewAction({ status: 'UPCOMING', openReview: { issueKey: 'CLSD-45' } }), {
+    type: 'link',
+    issueKey: 'CLSD-45',
+    url: null,
+  });
 });

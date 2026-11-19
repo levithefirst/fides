@@ -174,3 +174,12 @@ export function spotlightFor(agreements, escalations = []) {
 }
 
 const shortName = (vendor) => String(vendor || '').split(' ')[0] || vendor;
+
+
+// Board actions cell: link an open review when one exists, otherwise the
+// create button on Due agreements only.
+export function reviewAction(a) {
+  if (a?.openReview?.issueKey) return { type: 'link', issueKey: a.openReview.issueKey, url: a.openReview.url || null };
+  if (a?.status === 'DUE') return { type: 'create' };
+  return { type: 'none' };
+}

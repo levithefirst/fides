@@ -66,11 +66,11 @@ modules:
           description: How many days ahead to look. Defaults to 60.
 
     - key: create-review-issue
-      name: Create review issue
+      name: Create or reuse review issue
       function: action-review
       actionVerb: CREATE
       description: |
-        Create (or return the existing open) Jira review issue for one agreement on the current site, linked to the agreement issue. Use when the user wants to start a renew, cancel or renegotiate decision.
+        Create a Jira review issue for one agreement, or return the existing open one, linked to the agreement issue. Never duplicates. Use when the user wants to start a renew, cancel or renegotiate decision.
       inputs:
         agreement:
           title: Agreement
@@ -79,17 +79,17 @@ modules:
           description: The vendor name exactly as the user said it (for example Northwind Analytics). Use an issue key only if the user typed one. Never guess a key.
 
     - key: escalate-threatened-milestones
-      name: Escalate threatened milestones
+      name: Escalate threatened milestones (create or reuse)
       function: action-escalate
       actionVerb: CREATE
       description: |
-        For agreements whose notice-by or milestone date is within 14 days or past, create exactly one escalation issue per open linked blocker (a question, approval or unmet deliverable). Never duplicates. Optionally limited to one agreement.
+        For agreements whose notice-by or milestone date is within 14 days or past, create or reuse exactly one escalation issue per open linked blocker (a question, approval or unmet deliverable). Never duplicates. Optionally limited to one agreement.
       inputs:
         agreement:
           title: Agreement
           type: string
           required: false
-          description: Optional. The vendor name as the user said it, or an issue key only if the user typed one. Leave empty to check every agreement.
+          description: The vendor name as the user said it, or an issue key only if the user typed one. To scan every agreement, pass "all agreements" (or "all"). An empty value means the same thing.
 
     - key: draft-brief
       name: Draft renew or cancel brief

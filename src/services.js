@@ -326,6 +326,46 @@ export async function findBlockers(client, agreement) {
 
 // ---------- review issues ----------
 
+// Review descriptions used to freeze "N day(s) from today" at create time.
+// New issues use the absolute notice-by date only. Heal rewrites existing
+// Fides review issues, idempotently, and never touches other issue types.
+const REVIEW_RELATIVE_DAYS = /,\s*\d+ day\(s\) from today/;
+
+export function needsReviewNoticeHeal(description) {
+  return REVIEW_RELATIVE_DAYS.test(jira.adfText(description));
+}
+
+export function withAbsoluteNoticeBy(description) {
+  const blocks = description?.type === 'doc' && Array.isArray(description.content) ? description.content : [];
+  const content = blocks.map((block) => {
+    const text = jira.adfText(block);
+    if (!REVIEW_RELATIVE_DAYS.test(text)) return block;
+    const cleaned = text.replace(REVIEW_RELATIVE_DAYS, '').replace(/[ \t]+\./g, '.').replace(/\n+$/, '');
+    return adf.p(cleaned.trim());
+  });
+  return { type: 'doc', version: 1, content };
+}
+
+export async function healReviewNoticeWording(client, issueKey) {
+  if (!issueKey) return { updated: false };
+  const issue = await jira.getIssue(client, issueKey);
+  if (!(issue.labels || []).includes(LABELS.REVIEW)) return { updated: false, skipped: 'not-review' };
+  if (!needsReviewNoticeHeal(issue.description)) return { updated: false };
+  await jira.updateIssue(client, issueKey, { description: withAbsoluteNoticeBy(issue.description) });
+  return { updated: true, issueKey };
+}
+
+export async function healReviewNoticePages(client) {
+  const issues = await jira.searchAll(client, `labels = "${LABELS.REVIEW}" ORDER BY created ASC`, ['summary', 'labels', 'description', 'status']).catch(() => []);
+  let updated = 0;
+  for (const i of issues) {
+    if (!(i.labels || []).includes(LABELS.REVIEW) || !needsReviewNoticeHeal(i.description)) continue;
+    const r = await healReviewNoticeWording(client, i.key).catch(() => ({ updated: false }));
+    if (r.updated) updated += 1;
+  }
+  return { updated };
+}
+
 export async function ensureReviewIssue(client, agreement, { reason = 'notice window', fresh = false } = {}) {
   const base = await siteBase(client);
   const reviewKey = store.keys.review(agreement.issueId);
@@ -367,7 +407,7 @@ export async function ensureReviewIssue(client, agreement, { reason = 'notice wi
       issueTypeId: cfg.issueTypeId,
       summary: `Review: ${agreement.vendor} notice by ${shortDate(ev.noticeBy)} (renew, cancel or renegotiate)`,
       description: adf.doc(
-        adf.p(`The notice window for ${agreement.vendor} is open (${reason}). Notice-by date: ${ev.noticeBy}, ${ev.daysLeft} day(s) from today.`),
+        adf.p(`The notice window for ${agreement.vendor} is open (${reason}). Notice-by date: ${ev.noticeBy}.`),
         adf.p('Decide whether to renew, cancel or renegotiate. Ask Fides in Rovo Chat to draft a brief from the contract page.'),
         adf.p('Agreement: ', adf.link(agreement.issueKey, browse(base, agreement.issueKey) || agreement.issueKey)),
         ...(agreement.confluenceUrl ? [adf.p('Contract page: ', adf.link(agreement.confluenceUrl, agreement.confluenceUrl))] : []),
@@ -601,6 +641,7 @@ export async function runScan(client, source, { writeClient = null } = {}) {
     const esc = await escalateAll(client, agreements, today);
     stamp.escalationsCreated = esc.created.length;
     await healEscalationContractPages(client, agreements).catch(() => {});
+    await healReviewNoticePages(client).catch(() => {});
     stamp.errors.push(...esc.errors);
     for (const a of agreements.map((x) => evaluate(x, today))) {
       if (a.invalid || a.status !== STATUS.DUE || !a.issueKey) continue;
@@ -1223,18 +1264,20 @@ export async function recordPaint({ ms, source, agreements }) {
 export async function boardData(client, { asUser, accountId = null } = {}) {
   const board = await computeBoard(client, { asUser });
   await healEscalationContractPages(client, board.agreements).catch(() => {});
+  await healReviewNoticePages(client).catch(() => {});
   await saveSnapshot(accountId, board);
   return board;
 }
 
 async function computeBoard(client, { asUser }) {
   const today = todayIso();
-  const [cfg, seed, lastRun, loaded, escRecords] = await Promise.all([
+  const [cfg, seed, lastRun, loaded, escRecords, reviewIssues] = await Promise.all([
     store.get(store.keys.config),
     store.get(store.keys.seed),
     store.get(store.keys.lastRun),
     loadAgreements(client),
     loadEscalations(client),
+    jira.searchAll(client, `labels = "${LABELS.REVIEW}" ORDER BY created ASC`, ['summary', 'labels', 'status', 'issuelinks', 'created']).catch(() => []),
   ]);
   const agreements = loaded.map((a) => evaluate(a, today));
   agreements.sort((a, b) => (a.invalid ? 1 : 0) - (b.invalid ? 1 : 0) || a.daysLeft - b.daysLeft);
@@ -1247,6 +1290,19 @@ async function computeBoard(client, { asUser }) {
   });
   const base = cfg?.baseUrl || (await siteBase(client).catch(() => ''));
   const visibleIds = new Set(agreements.map((a) => String(a.issueId)));
+  const agreementKeys = new Set(agreements.map((a) => a.issueKey));
+  const openReviewByAgreement = new Map();
+  for (const i of reviewIssues) {
+    if (i.statusCategory === 'done') continue;
+    for (const l of i.links || []) {
+      if (!agreementKeys.has(l.key) || openReviewByAgreement.has(l.key)) continue;
+      openReviewByAgreement.set(l.key, { issueKey: i.key, url: browse(base, i.key) });
+    }
+  }
+  for (const a of agreements) {
+    const r = openReviewByAgreement.get(a.issueKey);
+    if (r) a.openReview = r;
+  }
   // What this user can do in the Fides project, so the board can go
   // read-only instead of failing on a create. Unknown (null) on error.
   const permissionsP =

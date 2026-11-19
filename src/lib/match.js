@@ -46,6 +46,12 @@ function fuzzyScore(query, a) {
 
 const KEY = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
+// Empty, "all" and "all agreements" all mean: do not scope to one vendor.
+export function isAllAgreementsRef(ref) {
+  const s = String(ref ?? '').trim().toLowerCase();
+  return s === '' || s === 'all' || s === 'all agreements';
+}
+
 export function matchAgreement(agreements, ref, contextIssueKey) {
   const raw = String(ref ?? '').trim();
   const n = norm(raw);
