@@ -68,6 +68,9 @@ export async function getServerInfo(client) {
   return call(client, 'jira', route`/rest/api/3/serverInfo`);
 }
 
+// First page only (50 projects, by name). Enough to pick a Fides project on
+// a demo or typical site; a site with more than 50 visible projects may not
+// list every one here.
 export async function listProjects(client) {
   const res = await call(client, 'jira', route`/rest/api/3/project/search?maxResults=50&orderBy=name`);
   return (res?.values || []).map((p) => ({ id: p.id, key: p.key, name: p.name }));
@@ -75,6 +78,8 @@ export async function listProjects(client) {
 
 // Pick a standard (non-subtask, base level) issue type: Task if present,
 // otherwise the first standard type. No custom issue type is required.
+// First 50 issue types in the project. Task is almost always on that page;
+// a project with more than 50 creatable types may not see every one.
 export async function pickIssueType(client, projectKey) {
   const res = await call(client, 'jira', route`/rest/api/3/issue/createmeta/${projectKey}/issuetypes?maxResults=50`);
   const types = res?.issueTypes || res?.values || [];
@@ -137,6 +142,17 @@ export async function setIssueProperty(client, issueKey, propertyKey, value) {
   await call(client, 'jira', route`/rest/api/3/issue/${issueKey}/properties/${propertyKey}`, { method: 'PUT', body: value });
 }
 
+// 404 if the issue or the property is missing.
+export async function getIssueProperty(client, issueKey, propertyKey) {
+  try {
+    const res = await call(client, 'jira', route`/rest/api/3/issue/${issueKey}/properties/${propertyKey}`);
+    return res?.value ?? null;
+  } catch (e) {
+    if (e instanceof ApiError && e.notFound) return null;
+    throw e;
+  }
+}
+
 export async function addWatcher(client, issueKey, accountId) {
   // The body is the account id as a JSON string.
   await call(client, 'jira', route`/rest/api/3/issue/${issueKey}/watchers`, { method: 'POST', body: String(accountId) });
@@ -197,7 +213,9 @@ export async function searchIssues(client, jql, fields = ['summary', 'status', '
   return (res?.issues || []).map(normaliseIssue);
 }
 
-// All matching issues (paged with nextPageToken), up to `cap`.
+// All matching issues, paged with nextPageToken, up to `cap` (default 500).
+// Callers that must not miss rows should pass a cap they can stand behind;
+// the default is a safety bound, not a complete export of a large site.
 export async function searchAll(client, jql, fields, properties = [], cap = 500) {
   const out = [];
   let nextPageToken;

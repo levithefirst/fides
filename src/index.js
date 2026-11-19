@@ -11,7 +11,7 @@ import { InvocationError, InvocationErrorCode } from '@forge/events';
 import * as svc from './services.js';
 import * as store from './lib/store.js';
 import * as jira from './lib/atlassian.js';
-import { todayIso, evaluate, upcomingNotices, DEFAULT_LOOKAHEAD_DAYS, shortDate } from './lib/dates.js';
+import { todayIso, upcomingNotices, DEFAULT_LOOKAHEAD_DAYS, shortDate } from './lib/dates.js';
 import { draftBrief, storageToText, DISCLAIMER } from './lib/brief.js';
 import { matchAgreement, confirmation } from './lib/match.js';
 
@@ -160,16 +160,7 @@ resolver.define('createReview', async ({ payload }) => {
 
 resolver.define('linkPage', async ({ payload }) => {
   try {
-    const client = api.asUser();
-    const pageId = jira.parsePageRef(payload.pageRef);
-    if (!pageId) return { ok: false, error: 'Paste a Confluence page URL or page id.' };
-    const page = await jira.getPage(client, pageId);
-    const a = await store.get(store.keys.agreement(payload.issueId));
-    if (!a) return { ok: false, error: 'Agreement not found.' };
-    const url = page.base && page.webui ? `${page.base}${page.webui}` : String(payload.pageRef);
-    await store.saveAgreement({ ...a, confluencePageId: pageId, confluenceUrl: url });
-    await jira.addRemoteLink(client, a.issueKey, url, `Contract page: ${a.vendor}`).catch(() => {});
-    return { ok: true };
+    return await svc.linkPageToAgreement(api.asUser(), payload);
   } catch (e) {
     return { ok: false, error: e.forbidden || e.notFound ? 'You cannot read that Confluence page, or it does not exist.' : friendly(e) };
   }
@@ -177,33 +168,10 @@ resolver.define('linkPage', async ({ payload }) => {
 
 // Issue panel: show status for an agreement, review, blocker or escalation.
 resolver.define('getPanel', async ({ context }) => {
-  const client = api.asUser();
-  const issueId = String(context?.extension?.issue?.id || '');
-  const issueKey = context?.extension?.issue?.key;
-  const today = todayIso();
-  const base = await svc.siteBase(client).catch(() => '');
-  const direct = issueId ? await store.get(store.keys.agreement(issueId)) : null;
-  if (direct) return { kind: 'agreement', agreement: evaluate(direct, today), baseUrl: base, disclaimer: DISCLAIMER };
-  // Otherwise find a tracked agreement linked to this issue.
-  try {
-    const issue = await jira.getIssue(client, issueKey || issueId);
-    for (const l of issue.links) {
-      const a = l.id ? await store.get(store.keys.agreement(l.id)) : null;
-      if (a) {
-        const kind = issue.labels.includes('fides-escalation')
-          ? 'escalation'
-          : issue.labels.includes('fides-blocker')
-            ? 'blocker'
-            : issue.labels.includes('fides-review')
-              ? 'review'
-              : 'linked';
-        return { kind, agreement: evaluate(a, today), baseUrl: base, disclaimer: DISCLAIMER };
-      }
-    }
-  } catch {
-    // fall through to "not tracked"
-  }
-  return { kind: 'none', disclaimer: DISCLAIMER };
+  return svc.panelData(api.asUser(), {
+    issueId: String(context?.extension?.issue?.id || ''),
+    issueKey: context?.extension?.issue?.key,
+  });
 });
 
 export const handler = resolver.getDefinitions();
@@ -412,7 +380,10 @@ export async function escalateThreatenedMilestones(payload) {
     const agreements = await svc.visibleAgreements(client, { asUser: true });
     let scope = agreements;
     let resolved = null;
-    if (payload?.agreement || ctxIssueKey(payload)) {
+    // Only scope to one agreement when the caller named it. A bare Jira
+    // issue context (for example a blocker or a non-Fides issue) must not
+    // error or silently limit the run.
+    if (payload?.agreement != null && String(payload.agreement).trim() !== '') {
       const res = resolveForAction(agreements, payload);
       if (!res.a) {
         const { a: _none, resolved: _r, ...miss } = res;
@@ -535,7 +506,7 @@ export async function draftBriefAction(payload) {
       }
     }
     const blockers = await svc.findBlockers(client, a).catch(() => []);
-    const brief = draftBrief({ agreement: a, today: todayIso(), pageText, pageStatus: pageStatus === 'not-found' ? 'forbidden' : pageStatus, blockers });
+    const brief = draftBrief({ agreement: a, today: todayIso(), pageText, pageStatus, blockers });
     brief.resolved = resolved;
     brief.source = source;
     brief.sourceLine = sourceLine(source);

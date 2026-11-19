@@ -111,7 +111,7 @@ export function draftBrief({ agreement, today, pageText = null, pageStatus = 'no
     options,
     whatAMissCouldMean: ifMissed,
     contractPage: {
-      status: pageStatus, // 'read' | 'forbidden' | 'not-linked' | 'error' | 'none'
+      status: pageStatus, // 'read' | 'forbidden' | 'not-found' | 'not-linked' | 'error' | 'none' | 'skipped'
       excerpts,
     },
     hedging:

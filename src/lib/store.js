@@ -7,7 +7,8 @@
 //   seed                     judge-mode state { state, at, reason, version }
 //   lock:seed                short-lived seeding lock (FAIL_IF_EXISTS + ttl)
 //   lastRun                  last scheduled / manual scan stamp
-//   esc:<agreementId>:<blockerId>   escalation claim { issueKey, at }
+//   esc:<agreementId>:<blockerId>   escalation claim { issueKey, at }.
+//                            The in-flight 'creating' claim uses CLAIM_TTL_SECONDS so a crashed run cannot block forever.
 //   review:<agreementId>     { issueKey, pingedFor }
 //   sample:<sampleKey>       { issueId } so seeding never duplicates
 //   samplePage:<sampleKey>   { id, url } the sample's Confluence page
@@ -39,6 +40,10 @@ export const get = (k) => kvs.get(k);
 export const set = (k, v) => kvs.set(k, v);
 export const del = (k) => kvs.delete(k);
 export const kvsSetTtl = (k, v, seconds) => kvs.set(k, v, { ttl: { value: seconds, unit: 'SECONDS' } });
+
+// In-flight create claims (escalation, review) expire so a crash cannot
+// block the next run. Done records are written with set() and have no TTL.
+export const CLAIM_TTL_SECONDS = 120;
 
 // Returns true if this caller won the key, false if it already existed.
 export async function claim(key, value, ttlSeconds) {

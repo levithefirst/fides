@@ -305,7 +305,9 @@ export async function loadEscalations(client) {
     byKey.set(k, rec);
     hydrate.push([k, rec]);
   }
-  await Promise.all(hydrate.map(([k, v]) => store.claim(k, v).catch(() => {})));
+  // set, not claim: a stuck in-flight 'creating' row must be overwritten
+  // once Jira already has the labelled escalation issue.
+  await Promise.all(hydrate.map(([k, v]) => store.set(k, v).catch(() => {})));
   return [...byKey.entries()].map(([k, v]) => ({ key: k, ...v }));
 }
 
@@ -318,15 +320,7 @@ export function resolveAgreement(agreements, ref, contextIssueKey) {
 // ---------- blockers ----------
 
 export async function findBlockers(client, agreement) {
-  const issue = await jira.getIssue(client, agreement.issueKey);
-  const linkedKeys = [...new Set(issue.links.map((l) => l.key).filter(Boolean))];
-  if (!linkedKeys.length) return [];
-  const found = await jira.searchIssues(
-    client,
-    `key in (${linkedKeys.join(',')}) AND labels = "${LABELS.BLOCKER}"`,
-    ['summary', 'status', 'labels'],
-    50
-  );
+  const found = await findLinkedWithLabel(client, agreement.issueKey, LABELS.BLOCKER);
   return found.map((b) => ({ id: b.id, key: b.key, summary: b.summary, statusCategory: b.statusCategory, statusName: b.statusName }));
 }
 
@@ -334,7 +328,12 @@ export async function findBlockers(client, agreement) {
 
 export async function ensureReviewIssue(client, agreement, { reason = 'notice window', fresh = false } = {}) {
   const base = await siteBase(client);
-  const existing = await store.get(store.keys.review(agreement.issueId));
+  const reviewKey = store.keys.review(agreement.issueId);
+  const adoptOpen = async (issueKey, extra = {}) => {
+    await store.set(reviewKey, { issueKey, at: new Date().toISOString(), adopted: true, ...extra });
+    return { created: false, issueKey, url: browse(base, issueKey) };
+  };
+  const existing = await store.get(reviewKey);
   if (existing?.issueKey) {
     try {
       const i = await jira.getIssue(client, existing.issueKey);
@@ -349,29 +348,41 @@ export async function ensureReviewIssue(client, agreement, { reason = 'notice wi
   // have a review yet, and judge mode's cold start stays fast.)
   const linkedReviews = fresh ? [] : await findLinkedWithLabel(client, agreement.issueKey, LABELS.REVIEW).catch(() => []);
   const openReview = linkedReviews.find((r) => r.statusCategory !== 'done');
-  if (openReview) {
-    await store.set(store.keys.review(agreement.issueId), { issueKey: openReview.key, at: new Date().toISOString(), adopted: true });
-    return { created: false, issueKey: openReview.key, url: browse(base, openReview.key) };
+  if (openReview) return adoptOpen(openReview.key);
+
+  const won = await store.claim(reviewKey, { state: 'creating', at: new Date().toISOString() }, store.CLAIM_TTL_SECONDS);
+  if (!won) {
+    const again = fresh ? [] : await findLinkedWithLabel(client, agreement.issueKey, LABELS.REVIEW).catch(() => []);
+    const open = again.find((r) => r.statusCategory !== 'done');
+    if (open) return adoptOpen(open.key);
+    const latest = await store.get(reviewKey);
+    if (latest?.issueKey) return { created: false, issueKey: latest.issueKey, url: browse(base, latest.issueKey) };
+    return { created: false, issueKey: null, pending: true };
   }
-  const cfg = await ensureConfig(client);
-  const ev = evaluate(agreement, todayIso());
-  const issue = await createNotifiedIssue(client, agreement, {
-    projectId: agreement.projectId || cfg.projectId,
-    issueTypeId: cfg.issueTypeId,
-    summary: `Review: ${agreement.vendor} notice by ${shortDate(ev.noticeBy)} (renew, cancel or renegotiate)`,
-    description: adf.doc(
-      adf.p(`The notice window for ${agreement.vendor} is open (${reason}). Notice-by date: ${ev.noticeBy}, ${ev.daysLeft} day(s) from today.`),
-      adf.p('Decide whether to renew, cancel or renegotiate. Ask Fides in Rovo Chat to draft a brief from the contract page.'),
-      adf.p('Agreement: ', adf.link(agreement.issueKey, browse(base, agreement.issueKey) || agreement.issueKey)),
-      ...(agreement.confluenceUrl ? [adf.p('Contract page: ', adf.link(agreement.confluenceUrl, agreement.confluenceUrl))] : []),
-      adf.p(adf.em(DISCLAIMER))
-    ),
-    labels: [LABELS.REVIEW, ...(agreement.sample ? [LABELS.SAMPLE] : [])],
-  });
-  const types = await jira.linkTypeNames(client);
-  await jira.linkIssues(client, types.relates, issue.key, agreement.issueKey).catch(() => {});
-  await store.set(store.keys.review(agreement.issueId), { issueKey: issue.key, at: new Date().toISOString(), notify: issue.notify });
-  return { created: true, issueKey: issue.key, url: browse(base, issue.key), notify: issue.notify };
+  try {
+    const cfg = await ensureConfig(client);
+    const ev = evaluate(agreement, todayIso());
+    const issue = await createNotifiedIssue(client, agreement, {
+      projectId: agreement.projectId || cfg.projectId,
+      issueTypeId: cfg.issueTypeId,
+      summary: `Review: ${agreement.vendor} notice by ${shortDate(ev.noticeBy)} (renew, cancel or renegotiate)`,
+      description: adf.doc(
+        adf.p(`The notice window for ${agreement.vendor} is open (${reason}). Notice-by date: ${ev.noticeBy}, ${ev.daysLeft} day(s) from today.`),
+        adf.p('Decide whether to renew, cancel or renegotiate. Ask Fides in Rovo Chat to draft a brief from the contract page.'),
+        adf.p('Agreement: ', adf.link(agreement.issueKey, browse(base, agreement.issueKey) || agreement.issueKey)),
+        ...(agreement.confluenceUrl ? [adf.p('Contract page: ', adf.link(agreement.confluenceUrl, agreement.confluenceUrl))] : []),
+        adf.p(adf.em(DISCLAIMER))
+      ),
+      labels: [LABELS.REVIEW, ...(agreement.sample ? [LABELS.SAMPLE] : [])],
+    });
+    const types = await jira.linkTypeNames(client);
+    await jira.linkIssues(client, types.relates, issue.key, agreement.issueKey).catch(() => {});
+    await store.set(reviewKey, { issueKey: issue.key, at: new Date().toISOString(), notify: issue.notify });
+    return { created: true, issueKey: issue.key, url: browse(base, issue.key), notify: issue.notify };
+  } catch (e) {
+    await store.del(reviewKey).catch(() => {});
+    throw e;
+  }
 }
 
 // ---------- threatened-milestone escalation ----------
@@ -471,8 +482,32 @@ export async function escalateAgreement(client, agreement, today, existing, { kn
   const cfg = await ensureConfig(client);
   const types = await jira.linkTypeNames(client);
   for (const plan of plans) {
-    const won = await store.claim(plan.key, { state: 'creating', at: new Date().toISOString() });
-    if (!won) continue;
+    const won = await store.claim(plan.key, { state: 'creating', at: new Date().toISOString() }, store.CLAIM_TTL_SECONDS);
+    if (!won) {
+      // Lost the claim: adopt the labelled issue if a crashed run left one,
+      // otherwise skip until the in-flight TTL expires.
+      const dup = fresh ? [] : await jira.searchIssues(client, `labels = "${plan.label}"`, ['summary'], 1);
+      if (dup[0]?.key) {
+        const issueKey = dup[0].key;
+        await store.set(plan.key, {
+          state: 'done',
+          issueKey,
+          agreementId: agreement.issueId,
+          agreementKey: agreement.issueKey,
+          vendor: agreement.vendor,
+          blockerKey: plan.blocker.key,
+          dateAtRisk: plan.risk.date,
+          riskKind: plan.risk.kind,
+          adopted: true,
+          at: new Date().toISOString(),
+        });
+        existing.add(plan.key);
+        out.existing.push({ issueKey, blockerKey: plan.blocker.key });
+        const url = await agreementPageUrl(client, agreement);
+        if (url) await healEscalationContractPage(client, issueKey, url).catch(() => {});
+      }
+      continue;
+    }
     try {
       // Jira-side guard in case KVS was cleared (skipped for a blocker
       // created moments ago, which cannot have an escalation yet).
@@ -673,11 +708,20 @@ async function findSampleIssue(client, sampleKey) {
 }
 
 // Issues linked to an agreement that carry a label, oldest first.
+// Every linked issue with `label`, oldest first. Paged via bulkFetch (100
+// keys at a time) so a cap cannot hide an existing review or blocker and
+// cause a duplicate create. Bad or hidden keys are skipped, not fatal.
 export async function findLinkedWithLabel(client, agreementKey, label) {
   const issue = await jira.getIssue(client, agreementKey);
   const keys = [...new Set(issue.links.map((l) => l.key).filter(Boolean))];
   if (!keys.length) return [];
-  return jira.searchIssues(client, `key in (${keys.join(',')}) AND labels = "${label}" ORDER BY created ASC`, ['summary', 'status', 'labels'], 20);
+  const found = [];
+  for (let i = 0; i < keys.length; i += 100) {
+    const batch = await jira.bulkFetch(client, keys.slice(i, i + 100), ['summary', 'status', 'labels', 'created']);
+    found.push(...batch.filter((r) => (r.labels || []).includes(label)));
+  }
+  found.sort((a, b) => String(a.created || '').localeCompare(String(b.created || '')) || String(a.id).localeCompare(String(b.id)));
+  return found;
 }
 
 // Jira is the single source of truth: reuse the sample issue if Jira has
@@ -1087,6 +1131,9 @@ export async function judgeModeSeed(client, source, { force = false, writeClient
 
 // ---------- fast first paint ----------
 
+// Cap on the per-user first-paint snapshot. Agreements past this are still
+// loaded live; only the cached first paint is truncated. Paint metrics keep
+// the last 20 entries (see recordPaint).
 const SNAPSHOT_MAX_AGREEMENTS = 200;
 
 // Per user, so a cached paint never shows an issue that user cannot open.
@@ -1102,6 +1149,67 @@ export async function getSnapshot(accountId) {
   if (!accountId) return null;
   const s = await store.get(store.keys.snapshot(accountId)).catch(() => null);
   return s?.data ? { ...s.data, fromSnapshot: true, savedAt: s.savedAt } : null;
+}
+
+async function agreementFromIssue(client, issue) {
+  if (!issue || !(issue.labels || []).includes(LABELS.AGREEMENT)) return null;
+  if (!issue.properties?.[AGREEMENT_PROP]) {
+    const value = await jira.getIssueProperty(client, issue.key, AGREEMENT_PROP).catch(() => null);
+    if (value) issue = { ...issue, properties: { ...(issue.properties || {}), [AGREEMENT_PROP]: value } };
+  }
+  return recordFromIssue(issue);
+}
+
+// Issue panel. KVS is a cache: on a cold install (empty store) fall back
+// to the fides-agreement issue property and labels, including when this
+// issue is a review, blocker or escalation linked to an agreement.
+export async function panelData(client, { issueId, issueKey }) {
+  const today = todayIso();
+  const base = await siteBase(client).catch(() => '');
+  const none = { kind: 'none', disclaimer: DISCLAIMER };
+  const asAgreement = (rec) => ({ kind: 'agreement', agreement: evaluate(rec, today), baseUrl: base, disclaimer: DISCLAIMER });
+  const direct = issueId ? await store.get(store.keys.agreement(issueId)) : null;
+  if (direct) return asAgreement(direct);
+
+  let issue;
+  try {
+    issue = await jira.getIssue(client, issueKey || issueId);
+  } catch {
+    return none;
+  }
+  const fromThis = await agreementFromIssue(client, issue);
+  if (fromThis) return asAgreement(fromThis);
+
+  for (const l of issue.links || []) {
+    let rec = l.id ? await store.get(store.keys.agreement(l.id)) : null;
+    if (!rec && l.key) {
+      const linked = await jira.getIssue(client, l.key).catch(() => null);
+      rec = await agreementFromIssue(client, linked);
+    }
+    if (!rec) continue;
+    const kind = issue.labels.includes(LABELS.ESCALATION)
+      ? 'escalation'
+      : issue.labels.includes(LABELS.BLOCKER)
+        ? 'blocker'
+        : issue.labels.includes(LABELS.REVIEW)
+          ? 'review'
+          : 'linked';
+    return { kind, agreement: evaluate(rec, today), baseUrl: base, disclaimer: DISCLAIMER };
+  }
+  return none;
+}
+
+// Board "link a page": write the remote link first, then KVS and the
+// shared issue property. A failed link leaves storage unchanged.
+export async function linkPageToAgreement(client, { issueId, pageRef }) {
+  const pageId = jira.parsePageRef(pageRef);
+  if (!pageId) return { ok: false, error: 'Paste a Confluence page URL or page id.' };
+  const page = await jira.getPage(client, pageId);
+  const a = (issueId ? await store.get(store.keys.agreement(issueId)) : null) || null;
+  if (!a) return { ok: false, error: 'Agreement not found.' };
+  const url = page.base && page.webui ? `${page.base}${page.webui}` : String(pageRef);
+  await linkAgreementPage(client, a, pageId, url);
+  return { ok: true };
 }
 
 export async function recordPaint({ ms, source, agreements }) {

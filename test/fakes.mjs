@@ -74,6 +74,7 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
     unassignable: new Set(),
     defaultAssignee: null,
     isAdmin: true,
+    failRemoteLink: false,
   };
 
   const json = (status, body) => ({
@@ -91,6 +92,7 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
       status: { name: i.status, statusCategory: { key: i.statusCategory } },
       assignee: i.assignee ? { accountId: i.assignee } : null,
       description: i.description || null,
+      created: i.created || null,
       project: { id: i.projectId, key: i.projectKey },
       issuelinks: i.links.map((k) => ({ type: { name: 'Blocks' }, outwardIssue: { id: issues.get(k).id, key: k } })),
     },
@@ -120,7 +122,7 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
         const want = body.fields.assignee?.id || null;
         if (want && (state.unassignable.has(want) || !state.users.some((u) => u.accountId === want)))
           return json(400, { errorMessages: [], errors: { assignee: `User '${want}' cannot be assigned issues.` } });
-        issues.set(key, { id, key, description: body.fields.description || null, properties: {}, summary: body.fields.summary, labels: body.fields.labels || [], status: 'To Do', statusCategory: 'new', projectId: proj.id, projectKey: proj.key, links: [], remote: [], comments: [], watchers: [], assignee: want || state.defaultAssignee });
+        issues.set(key, { id, key, description: body.fields.description || null, properties: {}, summary: body.fields.summary, labels: body.fields.labels || [], status: 'To Do', statusCategory: 'new', created: new Date().toISOString(), projectId: proj.id, projectKey: proj.key, links: [], remote: [], comments: [], watchers: [], assignee: want || state.defaultAssignee });
         return json(201, { id, key });
       }
       if (p === '/rest/api/3/search/jql') {
@@ -157,6 +159,7 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
         return json(200, (issues.get(m[1])?.remote || []).map((r) => ({ globalId: r.globalId, object: { url: r.url, title: r.title } })));
       }
       if ((m = /^\/rest\/api\/3\/issue\/([^/?]+)\/remotelink$/.exec(p))) {
+        if (state.failRemoteLink) return json(500, { errorMessages: ['Remote link failed'] });
         // Jira upserts when the globalId already exists on the issue.
         const remote = issues.get(m[1]).remote;
         const i = body.globalId ? remote.findIndex((r) => r.globalId === body.globalId) : -1;
@@ -165,8 +168,15 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
         else remote.push(entry);
         return json(201, { id: 1 });
       }
+      if ((m = /^\/rest\/api\/3\/issue\/([^/?]+)\/properties\/([^/?]+)$/.exec(p)) && method === 'GET') {
+        const i = issues.get(m[1]) || [...issues.values()].find((x) => x.id === m[1]);
+        if (!i) return json(404, { errorMessages: ['Issue does not exist'] });
+        const val = i.properties?.[m[2]];
+        if (val === undefined) return json(404, { errorMessages: ['Property does not exist'] });
+        return json(200, { key: m[2], value: val });
+      }
       if ((m = /^\/rest\/api\/3\/issue\/([^/?]+)\/properties\/([^/?]+)$/.exec(p)) && method === 'PUT') {
-        const i = issues.get(m[1]);
+        const i = issues.get(m[1]) || [...issues.values()].find((x) => x.id === m[1]);
         if (!i) return json(404, { errorMessages: ['Issue does not exist'] });
         i.properties = { ...(i.properties || {}), [m[2]]: body };
         return json(200, {});
