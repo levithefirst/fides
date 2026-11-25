@@ -8,6 +8,8 @@ Fides (FY-deez) is a Forge app for Jira, Confluence and Rovo. It is for legal, p
 
 Codegeist 2026 · Track: **Apps for Business Teams** · Bonus: **Best Agents** (`rovo:agent` + six `action` modules)
 
+Production **2.11.0** (commit e51ae26, 163 tests, `forge lint` clean). The private demo site is `one-atlas-wptq.atlassian.net` (board: 1 Due / 2 Upcoming / 1 On track). Live samples: Helios Payroll CLSD-35 (Due, notice-by 2026-11-24, end 2026-12-24, blocker CLSD-39, escalation CLSD-40, review CLSD-41), Northwind Analytics CLSD-36 (notice-by 2027-01-02), Larkspur Facilities CLSD-37 (notice-by 2026-12-13, review CLSD-45), Quay Support CLSD-38 (notice-by 2027-03-18). Highest key: CLSD-45. Judges install from the Sharing link (see Devpost) and get their own issue keys.
+
 > Fides tracks dates and obligations; it is not legal advice.
 
 ## What it does
@@ -29,23 +31,22 @@ Not a CLM, not a contract-approval router, not a jargon translator, not a budget
 
 Ask Fides **"Is Helios at risk, and what should I do?"** (a conversation starter, and the first button on the board). As the current user, the agent chains the existing actions on its own:
 
-1. `list-upcoming-notices`: finds Helios Payroll as Due, with its computed notice-by (end date minus notice period), its open blocker and its escalation.
+1. **List upcoming notices** (`list-upcoming-notices`): finds Helios Payroll as Due, with its computed notice-by (end date minus notice period), its open blocker and its escalation, and whether an open review already exists.
 2. Inspects the open blocker ("Approval pending: finance sign-off ...").
-3. `escalate-threatened-milestones` for Helios: idempotent, so it reports the existing escalation issue instead of creating another.
-4. `draft-brief` for Helios: reads the Confluence contract page as the user.
+3. **Create or reuse escalation** (`escalate-threatened-milestones`) for Helios: idempotent, so it reports the existing escalation issue instead of creating another.
+4. **Draft renew or cancel brief** (`draft-brief`) for Helios: reads the Confluence contract page as the user.
 5. Answers with the risk, why a date reminder is not enough, the escalation key, hedged renew / cancel / renegotiate options, what a missed notice could mean, and the not-legal-advice line.
 
 The board's **Ask Fides in Rovo** panel, directly under the Due spotlight, opens Rovo Chat with that question plus ready prompts for the everyday actions (list, review, escalate, brief); track-from-page is asked for in Rovo itself.
 
-| Action key | Verb | What it does |
-| --- | --- | --- |
-| `list-upcoming-notices` | `GET` | Lists agreements that are Due or fall within the next N days (default 60), most urgent first, using the same rule as the board. Only issues the user can see. |
-| `create-review-issue` | `CREATE` | Creates (or returns the open) review issue for one agreement on the **current** site, linked to the agreement. No hardcoded IDs. |
-| `escalate-threatened-milestones` | `CREATE` | Applies the escalation rule to one or all agreements. Idempotent: reports existing escalations instead of duplicating them. |
-| `draft-brief` | `GET` | Gathers a hedged renew / cancel / renegotiate brief: timing, open blockers, options, what a missed notice could mean, and quoted excerpts from the linked Confluence page read **as the user**. It cites its source ("Source: Fides sample contract: Helios Payroll (link)"); if the page cannot be read, the source line says so explicitly and why. |
-
-| `check-agreement-from-page` | `GET` | The read-only first step of "track this contract": reads the Confluence page as the user and answers either "already tracked as CLSD-35" or a proposal with quoted sources. It creates and writes nothing, and being a read action Rovo runs it without a confirmation card. |
-| `track-agreement-from-page` | `CREATE` | "Track this contract" or "add Helios from its page": reads the Confluence page **as the user** and proposes vendor, end date, notice period, owner and up to 3 obligations, each with the quoted sentence it came from and a confidence. Parsing is deterministic (tables, date formats, "30 days' written notice", "notice of 60 days"); the agent fills gaps from its own reading. Nothing is created until the user confirms (`confirm: true`); with `confirm: false` it writes nothing at all. On an already-tracked sample page whose dates lag Jira, confirming also updates the page in place. The rewrite is made by the Fides app, which created the sample pages, so a user who can read but not edit them is not blocked; reads stay with the signed-in user, and only pages titled "Fides sample contract: ..." that belong to a sample agreement are ever written. One agreement per page: asking again returns the existing one. An unreadable page gets "I cannot read this page". |
+| Action key | Confirm-card name | Verb | What it does |
+| --- | --- | --- | --- |
+| `list-upcoming-notices` | List upcoming notices | `GET` | Lists agreements that are Due or fall within the next N days (default 60), most urgent first, using the same rule as the board. Only issues the user can see. Includes open review and escalation keys so the agent can say, before any CREATE confirm card, whether confirming will reuse or create. |
+| `create-review-issue` | Create or reuse review issue | `CREATE` | Creates (or returns the open) review issue for one agreement on the **current** site, linked to the agreement. No hardcoded IDs. Never duplicates. |
+| `escalate-threatened-milestones` | Create or reuse escalation | `CREATE` | Applies the escalation rule to one or all agreements. Idempotent: reports existing escalations instead of duplicating them. |
+| `draft-brief` | Draft renew or cancel brief | `GET` | Gathers a hedged renew / cancel / renegotiate brief: timing, open blockers, options, what a missed notice could mean, and quoted excerpts from the linked Confluence page read **as the user**. It cites its source ("Source: Fides sample contract: Helios Payroll (link)"); if the page cannot be read, the source line says so explicitly and why. |
+| `check-agreement-from-page` | Check contract page | `GET` | The read-only first step of "track this contract": reads the Confluence page as the user and answers either "already tracked as CLSD-35" or a proposal with quoted sources. It creates and writes nothing, and being a read action Rovo runs it without a confirmation card. |
+| `track-agreement-from-page` | Track agreement from page | `CREATE` | "Track this contract" or "add Helios from its page": reads the Confluence page **as the user** and proposes vendor, end date, notice period, owner and up to 3 obligations, each with the quoted sentence it came from and a confidence. Parsing is deterministic (tables, date formats, "30 days' written notice", "notice of 60 days"); the agent fills gaps from its own reading. Nothing is created until the user confirms (`confirm: true`); with `confirm: false` it writes nothing at all. On an already-tracked sample page whose dates lag Jira, confirming also updates the page in place. The rewrite is made by the Fides app, which created the sample pages, so a user who can read but not edit them is not blocked; reads stay with the signed-in user, and only pages titled "Fides sample contract: ..." that belong to a sample agreement are ever written. One agreement per page: asking again returns the existing one. An unreadable page gets "I cannot read this page". |
 
 Agreements are resolved **by name first** (exact, then contained, then fuzzy with a one-letter typo allowed), and by issue key only as a fallback, so a nearby or guessed key never wins over the vendor the user named. Ambiguous names return the candidates instead of a guess, and every reply confirms the resolved key, for example "Resolved "Northwind Analytics" to CLSD-36 Northwind Analytics (matched by exact name)."
 
@@ -55,15 +56,15 @@ The agent prompt (`static/agent/prompt.txt`) tells it to use only action data, h
 
 | Criterion (20% each) | How Fides meets it | Atlassian features used |
 | --- | --- | --- |
-| **Technological Implementation** | A real loop, not a single demo path: structured agreements, a shared status rule used by the board, scan and agent, idempotent escalation (KVS `FAIL_IF_EXISTS` claims plus Jira label guards), install-time and first-open seeding with a lock, permission-aware reads via bulk fetch, a deterministic contract-page parser, a validated 100-row import through the same create path as the form, owner notification with a three-step fallback, and a per-user snapshot for fast first paint. 155 tests in CI. | **Forge modules**: `jira:globalPage`, `jira:issuePanel`, `scheduledTrigger` (interval `day`, `api.asApp()`), `trigger` on `avi:forge:installed:app`, Key-Value Store (`@forge/kvs`). **Jira issues and links**: agreements, blockers, review and escalation issues, issue links, remote links. |
+| **Technological Implementation** | A real loop, not a single demo path: structured agreements, a shared status rule used by the board, scan and agent, idempotent escalation (KVS `FAIL_IF_EXISTS` claims plus Jira label guards), Jira issue properties and labels as the source of truth with KVS as a per-install cache, install-time and first-open seeding with a lock, permission-aware reads via bulk fetch, a deterministic contract-page parser, a validated 100-row import through the same create path as the form, owner notification with a three-step fallback, and a per-user snapshot for fast first paint. 163 tests in CI. | **Forge modules**: `jira:globalPage`, `jira:issuePanel`, `scheduledTrigger` (interval `day`, `api.asApp()`), `trigger` on `avi:forge:installed:app`, Key-Value Store (`@forge/kvs`). **Jira issues and links**: agreements, blockers, review and escalation issues, issue links, remote links. |
 | **Design** | Native UI Kit, ADS tokens, light and dark themes, colourblind-safe chips (shape plus label), 30/60/90 grouping, last-scan status, one Fides Umber accent. Every edge state is one plain sentence and one next step. The board paints from a cached snapshot ("Updated 4m ago, refreshing") and swaps in fresh data without a layout jump. Import shows a preview with per-row errors before anything is created. | UI Kit (`render: native`, `UserPicker`, `DynamicTable`), ADS tokens, Rovo bridge `rovo.open` from the board. |
 | **Potential Impact** | Missed notice periods and auto-renewals are a named cause of value leakage (see Evidence). Fides puts the date, the obligation and the blocker in the tools these teams already use, and acts before the window closes. Teams get started fast: paste their existing spreadsheet, or track a contract straight from its Confluence page. The owner hears about it through Jira itself: review and escalation issues are assigned to them and they are added as a watcher. | **Jira issues** as the system of record (assignee and watchers drive Jira's own notifications), **Confluence contract pages** as the source of terms. |
-| **Innovation / Idea** | Connects contract dates to live work: an open blocker issue threatening a notice date triggers a hedged escalation automatically and through the agent. The agent can also turn a contract page into a tracked agreement, quoting each clause it relied on. | **Rovo agent + actions**: `rovo:agent` with five `action` modules (`GET`, `CREATE`). **Confluence**: contract pages read as the user for the brief and for track-from-page. |
+| **Innovation / Idea** | Connects contract dates to live work: an open blocker issue threatening a notice date triggers a hedged escalation automatically and through the agent. The agent can also turn a contract page into a tracked agreement, quoting each clause it relied on. | **Rovo agent + actions**: `rovo:agent` with six `action` modules: List upcoming notices, Create or reuse review issue, Create or reuse escalation, Draft renew or cancel brief, Check contract page, Track agreement from page. **Confluence**: contract pages read as the user for the brief and for track-from-page. |
 | **Presentation** | Zero-setup judge mode: install, open the board, see Due / Upcoming / On track and the escalation within 10 seconds. The demo script walks the full loop in under 5 minutes. | `trigger` (install), `jira:globalPage`, **`scheduledTrigger` with `api.asApp()`** shown via the last-scan line, Rovo Chat. |
 
 ## What the first screen shows
 
-- **Due spotlight**: the most urgent Due agreement, its computed notice-by ("Notice by 2026-11-21 = end date 2026-12-21 minus 30 days notice"), its open blocker, its single linked escalation, and the line **"A date reminder can't see that this blocker is still open."**
+- **Due spotlight**: the most urgent Due agreement, its computed notice-by (on the live demo site: "Notice by 2026-11-24 = end date 2026-12-24 minus 30 days notice"; a fresh install computes dates from today), its open blocker, its single linked escalation, and the line **"A date reminder can't see that this blocker is still open."**
 - **Ask Fides in Rovo** right below, above the fold.
 - Then the full board, grouped by status or 30 / 60 / 90 day window. Due rows also show the notice-by arithmetic, open blockers and escalation keys.
 
@@ -136,7 +137,7 @@ Requires **Node 22.x (22.23.4 or later) or 24.x (24.22.1 or later)**, per the li
 ```bash
 npm install -g @forge/cli@latest
 npm ci
-npm test                    # 130 unit and integration tests
+npm test                    # 163 unit and integration tests
 node scripts/copy-lint.mjs  # copy rules (also runs in npm test)
 npm run validate:manifest   # offline schema check with @forge/manifest
 ```

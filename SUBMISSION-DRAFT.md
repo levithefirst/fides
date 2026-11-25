@@ -2,19 +2,25 @@
 
 Fluid submits. No agent submits or posts. Deadline: **Tue 22 Dec 2026, 9:00 PM WAT** (3:00 PM EST).
 
+The field-by-field paste copy (with the Sharing link filled) lives on the box at `/workspace/hackathon-ideas/codegeist2026/devpost-fields.md`. This file stays in the private repo and must not contain the Sharing URL.
+
+Live product (keys are for the demo site, not a judge install): production **2.11.0** (commit e51ae26, 163 tests, `forge lint` clean) on `one-atlas-wptq.atlassian.net`. Board: **1 Due / 2 Upcoming / 1 On track**. Helios Payroll CLSD-35 (Due, notice-by 2026-11-24, end 2026-12-24, blocker CLSD-39, escalation CLSD-40, review CLSD-41); Northwind Analytics CLSD-36 (notice-by 2027-01-02); Larkspur Facilities CLSD-37 (notice-by 2026-12-13, review CLSD-45); Quay Support CLSD-38 (notice-by 2027-03-18). Highest key: CLSD-45.
+
 ---
 
 **Title:** Fides
 
-**Tagline:** Fides connects what an agreement promises to what is actually blocking it, and escalates before the notice window closes.
+**Tagline:** From signed to delivered
+
+**Elevator pitch (if the form has a second short field; 121 characters, under the typical 200-character Devpost limit):** Fides connects what an agreement promises to what is actually blocking it, and escalates before the notice window closes.
 
 **Category:** Apps for Business Teams
 
 **Bonus prize:** Best Agents (Forge app with a `rovo:agent` module and six `action` modules)
 
-**Installation link:** `<SHARING INSTALL LINK>`
+**Installation link:** `[FORGE-SHARING-LINK]`
 
-**Demo video:** `<PUBLIC YOUTUBE URL>`
+**Demo video:** `[YOUTUBE-URL]`
 
 ## Inspiration / problem
 
@@ -28,7 +34,15 @@ World Commerce & Contracting with Ironclad (*Closing the Procurement Value Gap*,
 - Fides computes the notice-by date and shows a notice board: **Due** (within 14 days or past), **Upcoming** (15 to 60 days), **On track** (over 60 days), each with a shape and a label, plus 30/60/90 day grouping.
 - A blocker (an open question, a pending approval or an unmet deliverable) is a linked Jira issue. If it is still open when the notice date is Due, Fides creates exactly one escalation issue, linked to the agreement, the blocker and the contract page, saying the blocker "may put the notice date of DD MMM at risk".
 - A daily scheduled trigger opens review issues and runs the escalation rule as the app.
-- The **Fides Rovo agent** works through five actions as the current user: list upcoming notices, create a review issue, escalate threatened milestones, draft a hedged renew / cancel / renegotiate brief from the Confluence page, and track an agreement straight from its Confluence contract page (a proposal with quoted sources, created only after the user confirms).
+- Jira is the source of truth: the `fides-agreement` issue property plus labels. Forge KVS is a per-install cache hydrated from Jira; an empty store never means "no agreements".
+- The **Fides Rovo agent** works through six actions as the current user:
+  1. **List upcoming notices** (`list-upcoming-notices`, GET), including open review and escalation keys so the agent can say whether a later confirm will reuse or create;
+  2. **Create or reuse review issue** (`create-review-issue`, CREATE), never duplicates;
+  3. **Create or reuse escalation** (`escalate-threatened-milestones`, CREATE), never duplicates;
+  4. **Draft renew or cancel brief** (`draft-brief`, GET) from the Confluence page as the current user;
+  5. **Check contract page** (`check-agreement-from-page`, GET), read-only, no confirm card;
+  6. **Track agreement from page** (`track-agreement-from-page`, CREATE), only after the user confirms a proposal.
+- Before a CREATE confirm card, the agent lists first and says in chat whether confirming will reuse or create.
 - **Getting data in:** paste rows from a spreadsheet (preview with per-row errors, duplicates skipped, up to 100 rows), or track from a contract page.
 - **Owners hear about it in Jira:** review and escalation issues are assigned to the agreement owner, who is also added as a watcher, so Jira's own notifications do the work. No custom email.
 - **Fast and honest board:** paints from a per-user snapshot in under 3 seconds on a warm site, and every edge state (no Rovo, no Confluence, read-only user, zero agreements) shows one plain sentence and one next step.
@@ -42,13 +56,15 @@ Fides tracks dates and obligations; it is not legal advice.
 - `jira:issuePanel`: notice status on agreement, review, blocker and escalation issues.
 - `scheduledTrigger` (`interval: day`) using `api.asApp()`, with caught errors and a visible last-run stamp.
 - `trigger` on `avi:forge:installed:app` for judge mode, with retry while app permissions propagate.
-- `rovo:agent` **Fides** with actions `list-upcoming-notices` (GET), `create-review-issue` (CREATE), `escalate-threatened-milestones` (CREATE), `draft-brief` (GET) and `track-agreement-from-page` (CREATE).
-- Forge Key-Value Store (`@forge/kvs`) for structured dates, idempotency claims and state. No external hosting.
+- `rovo:agent` **Fides** with six actions: `list-upcoming-notices` (List upcoming notices, GET), `create-review-issue` (Create or reuse review issue, CREATE), `escalate-threatened-milestones` (Create or reuse escalation, CREATE), `draft-brief` (Draft renew or cancel brief, GET), `check-agreement-from-page` (Check contract page, GET) and `track-agreement-from-page` (Track agreement from page, CREATE).
+- Jira issue properties and labels as the source of truth. Forge Key-Value Store (`@forge/kvs`) as a per-install cache and for short-lived idempotency claims. No external hosting.
 - Jira REST v3 (issues, links, remote links, JQL search, bulk fetch) and Confluence REST v2 (pages, spaces).
 
 ## Challenges
 
-- Making escalation strictly idempotent across a daily trigger that may fire twice, an install trigger, a board open and the agent: KVS fail-if-exists claims plus a Jira label guard.
+- Making escalation strictly idempotent across a daily trigger that may fire twice, an install trigger, a board open and the agent: KVS fail-if-exists claims plus a Jira label guard; a lost claim adopts the existing issue by label.
+- App storage is per product install, so an empty Confluence-side store used to look like "no agreements." Jira properties and labels are now the source of truth.
+- Naming the CREATE actions **Create or reuse review issue** and **Create or reuse escalation**, and having the agent list first, so the confirm card and the chat both say whether confirming will reuse or create.
 - Seeding fast enough for a 10 second first impression: parallel discovery and escalating the just-created blocker directly.
 - Keeping every statement hedged, with "Fides tracks dates and obligations; it is not legal advice." on every brief and screen.
 
@@ -56,6 +72,8 @@ Fides tracks dates and obligations; it is not legal advice.
 
 - One status rule shared by the board, the scan and the agent, with boundary tests (today, past, 14/15, 60/61, leap years).
 - A permission-aware agent that says plainly when it cannot read a contract page.
+- On the live demo site, a second review or escalation request reuses the open issue (Helios review CLSD-41, Larkspur review CLSD-45, Helios escalation CLSD-40) instead of opening a duplicate.
+- Production 2.11.0: 163 tests, `forge lint` clean.
 
 ## What's next
 

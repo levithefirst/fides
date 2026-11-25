@@ -31,9 +31,9 @@ Target length: about 4:15. Use a fresh demo site from `forge site provision` wit
 ## 2:40 to 4:00. Rovo agent with actions
 
 13. Back on the board, point at the spotlight line: "A date reminder can't see that this blocker is still open." Click **Is Helios at risk, and what should I do?** Rovo Chat opens with the Fides agent.
-14. Let it run without typing. Narrate the action cards as they appear: it lists notices, finds the open blocker, calls escalate threatened milestones (and reports the existing escalation instead of creating a duplicate), then drafts the brief from the Confluence page.
+14. Let it run without typing. Narrate the action cards as they appear: it lists notices (List upcoming notices), finds the open blocker, calls Create or reuse escalation (and reports the existing escalation instead of creating a duplicate), then drafts the brief (Draft renew or cancel brief) from the Confluence page.
 15. Read the answer: the risk with the notice-by date, the blocker, the escalation key, renew / cancel / renegotiate options, what a missed notice could mean, and "Fides tracks dates and obligations; it is not legal advice."
-16. Ask "Create a review issue for Northwind Analytics." The agent confirms the Northwind key, creates a real Jira issue on this site assigned to the owner (or the agreement's assignee), and returns its key. Open it and point at the assignee.
+16. Ask "Create a review issue for Northwind Analytics." The agent lists first and says whether confirming will reuse or create, then the confirm card is named **Create or reuse review issue**. It confirms the Northwind key, creates or returns the open Jira review issue on this site assigned to the owner (or the agreement's assignee), and returns its key. Open it and point at the assignee.
 16a. (20 s) In Confluence, open any contract page and say "Track this contract". Show the proposal quoting the notice clause, confirm, and show the new agreement on the board. Then click **Import agreements**, paste two spreadsheet rows, preview, import.
 
 ## 4:00 to 4:15. Close
@@ -45,4 +45,4 @@ Target length: about 4:15. Use a fresh demo site from `forge site provision` wit
 - Under 5:00. English audio or captions. Public visibility.
 - No secrets, tokens or personal email addresses on screen.
 - The escalation is shown appearing without manual setup.
-- The chained ask shows list, escalate and brief action cards; the create-review step shows the fourth action.
+- The chained ask shows List upcoming notices, Create or reuse escalation and Draft renew or cancel brief action cards; the review step shows Create or reuse review issue. Check contract page and Track agreement from page are the remaining two of the six actions.
