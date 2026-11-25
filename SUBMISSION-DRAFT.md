@@ -20,7 +20,7 @@ Live product (keys are for the demo site, not a judge install): production **3.2
 
 **Installation link:** `[FORGE-SHARING-LINK]`
 
-**Demo video:** `[YOUTUBE-URL]`
+**Demo video:** `https://youtu.be/flNyQe8s6BA`
 
 ## Inspiration / problem
 
