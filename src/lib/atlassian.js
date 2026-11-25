@@ -320,7 +320,11 @@ export async function findPageByTitle(client, spaceId, title) {
   const res = spaceId
     ? await call(client, 'confluence', route`/wiki/api/v2/pages?space-id=${spaceId}&title=${title}&status=current&limit=5`)
     : await call(client, 'confluence', route`/wiki/api/v2/pages?title=${title}&status=current&limit=5`);
-  const p = (res?.results || []).find((r) => r.title === undefined || r.title === title);
+  // Lowest id first, so every install and every run converges on the same
+  // page if duplicates ever exist.
+  const p = (res?.results || [])
+    .filter((r) => r.title === undefined || r.title === title)
+    .sort((a, b) => Number(a.id) - Number(b.id))[0];
   return p ? { id: p.id, webui: p._links?.webui, base: res?._links?.base } : null;
 }
 

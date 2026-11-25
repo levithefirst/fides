@@ -49,3 +49,16 @@ test('nobody may create a space: no pages, no throw, a clear error per agreement
   assert.equal(site.pages.size, 0);
   assert.ok(bf.errors.some((e) => /no Confluence space/.test(e)));
 });
+
+test('Jira install trigger never creates pages (it cannot lock against the Confluence install)', async () => {
+  const site = fakeSite();
+  site.state.spaces = [];
+  await svc.judgeModeSeed(site.client, 'install (jira)');
+  const bf = await svc.backfillSamplePages(site.client, { source: 'install (jira)', createMissing: false });
+  assert.equal(site.pages.size, 0);
+  assert.equal(site.state.spaceCreates, 0);
+  assert.equal(bf.linked.length, 0);
+  const bf2 = await svc.backfillSamplePages(site.client, { source: 'install (confluence)' });
+  assert.equal(bf2.linked.length, 4);
+  assert.equal(site.pages.size, 4);
+});

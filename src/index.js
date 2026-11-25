@@ -227,7 +227,12 @@ export async function installed(event, context) {
       console.log(`Fides judge mode on install (${product}): ${r.state}${r.adopted ? `, reused ${r.adopted} existing sample agreement(s)` : ''}`);
       if (['needs-project', 'no-projects', 'no-permission', 'partial', 'error'].includes(r.state)) return retryLater(retryCount, `seed ${r.state}`);
     }
-    const bf = await svc.backfillSamplePages(client, { source: `install (${product})` });
+    // The Jira and Confluence installs have separate app storage, so a page
+    // lock in one cannot stop the other: when both events fire together (an
+    // upgrade fires both) each created its own copy of every sample page.
+    // Only the Confluence install (and board open, and the daily Confluence
+    // run) creates pages; the Jira install only links pages that exist.
+    const bf = await svc.backfillSamplePages(client, { source: `install (${product})`, createMissing: product !== 'jira' });
     console.log(`Fides install (${product}): backfill linked=${bf.linked.length} pagesSynced=${bf.synced.length}`);
     if (bf.forbidden) return retryLater(retryCount, 'Confluence permissions not ready');
   } catch (e) {
