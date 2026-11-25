@@ -29,6 +29,7 @@ modules:
       function: on-install
       events:
         - avi:forge:installed:app
+        - avi:forge:upgraded:app
 
   rovo:agent:
     - key: fides-agent
@@ -197,6 +198,7 @@ permissions:
     - read:page:confluence
     - write:page:confluence
     - read:space:confluence
+    - write:space:confluence
 
 app:
   id: ari:cloud:ecosystem::app/8014edf9-7ace-467e-9b4b-6ae6d9328c9f

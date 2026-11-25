@@ -61,6 +61,10 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
   const pageUpdates = [];
   const state = {
     confluence,
+    // spaces: null = the usual LEGAL space; [] = a clean Free site with no space.
+    spaces: null,
+    spaceCreates: 0,
+    canCreateSpace: true,
     canCreate: true,
     createmetaEmpty: false,
     canBrowse: true,
@@ -218,7 +222,20 @@ export function fakeSite({ latencyMs = 0, extraLatency = null, confluence = true
     }
     if (product === 'confluence') {
       if (!state.confluence) return json(403, { message: 'Confluence not available' });
-      if (p.startsWith('/wiki/api/v2/spaces')) return json(200, { results: [{ id: '777', key: 'LEGAL', type: 'global' }] });
+      if (p === '/wiki/api/v2/spaces' && method === 'POST') {
+        if (!state.canCreateSpace) return json(403, { message: 'no permission to create spaces' });
+        if (state.spaces?.some((x) => x.key === body.key)) return json(400, { message: 'space key exists' });
+        state.spaceCreates++;
+        const sp = { id: String(5000 + state.spaceCreates), key: body.key, name: body.name, type: 'global' };
+        state.spaces = [...(state.spaces || []), sp];
+        return json(200, sp);
+      }
+      if (p.startsWith('/wiki/rest/api/space') && method === 'POST') return json(404, { message: 'not used' });
+      if (p.startsWith('/wiki/api/v2/spaces')) {
+        if (state.spaces === null) return json(200, { results: [{ id: '777', key: 'LEGAL', type: 'global' }] });
+        const k = /keys=([^&]+)/.exec(p)?.[1];
+        return json(200, { results: k ? state.spaces.filter((x) => x.key === k) : state.spaces });
+      }
       if (p.startsWith('/wiki/api/v2/pages?')) {
         const title = decodeURIComponent(/title=([^&]+)/.exec(p)[1]);
         const space = /space-id=([^&]+)/.exec(p)?.[1];

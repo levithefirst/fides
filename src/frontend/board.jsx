@@ -28,13 +28,13 @@ import ForgeReconciler, {
 } from '@forge/react';
 import { invoke, rovo } from '@forge/bridge';
 import { StatusChip, UmberRule, Footer, card } from './components';
-import { deriveBoardView, ROVO_NOTE, reviewAction } from '../lib/view.js';
+import { deriveBoardView, ROVO_NOTE, ROVO_HINT, reviewAction, upcomingInline } from '../lib/view.js';
 
 const AGENT = { type: 'forge', agentKey: 'fides-agent', agentName: 'Fides' };
 
 // One button per common Rovo action, after the chained ask.
 const AGENT_ACTIONS = [
-  { label: 'List upcoming notices', prompt: 'List the agreements with notices due in the next 60 days.' },
+  { label: 'List upcoming notices', inline: true, prompt: 'List the agreements with notices due in the next 60 days.' },
   { label: 'Create a review issue', prompt: 'Create a review issue for the most urgent Due agreement.' },
   { label: 'Escalate threatened milestones', prompt: 'Escalate any threatened milestones: open blockers on agreements whose notice date is within 14 days.' },
   { label: 'Draft a renew / cancel brief', prompt: 'Draft a hedged renew, cancel or renegotiate brief for the most urgent agreement, using its Confluence contract page.' },
@@ -406,11 +406,13 @@ function ProjectPicker({ onPicked }) {
   );
 }
 
-function AskFides({ rovoEnabled, rovoNote, spotlight }) {
+function AskFides({ rovoEnabled, rovoNote, spotlight, agreements, base }) {
   const [failed, setFailed] = useState(false);
+  const [showList, setShowList] = useState(false);
   const open = (prompt) => rovo.open({ ...AGENT, prompt }).catch(() => setFailed(true));
-  const disabled = !rovoEnabled || failed;
+  const rovoOff = !rovoEnabled || failed;
   const chained = spotlight?.askPrompt || 'Is Helios at risk, and what should I do?';
+  const list = showList ? upcomingInline(agreements, 60) : null;
   return (
     <Box xcss={card}>
       <Stack space="space.100">
@@ -419,19 +421,37 @@ function AskFides({ rovoEnabled, rovoNote, spotlight }) {
           <Text size="small" color="color.text.subtle">Fides acts as you, with your permissions.</Text>
         </Inline>
         <Inline space="space.100" shouldWrap>
-          <Button appearance="primary" onClick={() => open(chained)} isDisabled={disabled}>
+          <Button appearance="primary" onClick={() => open(chained)} isDisabled={rovoOff}>
             {chained}
           </Button>
           {AGENT_ACTIONS.map((a) => (
-            <Button key={a.label} onClick={() => open(a.prompt)} isDisabled={disabled}>
+            <Button
+              key={a.label}
+              onClick={() => {
+                // The list also renders inline, so it works where Rovo cannot open.
+                if (a.inline) setShowList(true);
+                if (!rovoOff) open(a.prompt);
+              }}
+              isDisabled={rovoOff && !a.inline}
+            >
               {a.label}
             </Button>
           ))}
         </Inline>
-        {rovoNote || failed ? (
-          <Text size="small" color="color.text.subtle">
-            {rovoNote || ROVO_NOTE}
-          </Text>
+        <Text size="small" color="color.text.subtle">
+          {rovoNote || (failed ? ROVO_NOTE : ROVO_HINT)}
+        </Text>
+        {list ? (
+          <Stack space="space.050">
+            <Text weight="medium">{list.length ? `Upcoming notices, next 60 days (${list.length})` : 'No notices are due in the next 60 days.'}</Text>
+            {list.map((r) => (
+              <Inline key={r.issueKey} space="space.075" alignBlock="center" shouldWrap>
+                <StatusChip status={r.status} />
+                <Link href={browse(base, r.issueKey)}>{`${r.issueKey}  ${r.vendor}`}</Link>
+                <Text>{`notice by ${r.noticeByShort}, ${r.timing}`}</Text>
+              </Inline>
+            ))}
+          </Stack>
         ) : null}
       </Stack>
     </Box>
@@ -647,7 +667,7 @@ function Board() {
 
       <Spotlight s={view.spotlight} base={data.baseUrl} />
 
-      <AskFides rovoEnabled={view.rovoEnabled} rovoNote={view.rovoNote} spotlight={view.spotlight} />
+      <AskFides rovoEnabled={view.rovoEnabled} rovoNote={view.rovoNote} spotlight={view.spotlight} agreements={data.agreements || []} base={data.baseUrl} />
 
       {flash ? (
         <SectionMessage appearance="information">

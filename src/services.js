@@ -1056,7 +1056,9 @@ export async function backfillSamplePages(client, opts = {}) {
   }
   const base = await siteBase(client).catch(() => '');
   let spacePromise = null;
-  const space = () => (spacePromise ??= jira.pickSpace(client).catch(() => null));
+  // A clean Free Confluence site can have no space at all: create the Fides
+  // space (as the user first, then the app) instead of silently skipping.
+  const space = () => (spacePromise ??= jira.ensureSpace([client, opts.writeClient && opts.writeClient !== client ? opts.writeClient : null]).catch(() => null));
   await Promise.all(
     todo.map(async (a) => {
       try {
@@ -1068,7 +1070,10 @@ export async function backfillSamplePages(client, opts = {}) {
           if (!page) {
             if (!createMissing) return;
             const sp = await space();
-            if (!sp) return;
+            if (!sp) {
+              out.errors.push(`${a.issueKey}: no Confluence space to hold the sample page`);
+              return;
+            }
             // Per-sample lock so a concurrent install event and board open
             // cannot both create the page.
             if (!(await store.claim(store.keys.pageLock(a.sampleKey), { at: new Date().toISOString() }, 60))) return;

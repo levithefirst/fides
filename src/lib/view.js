@@ -10,6 +10,27 @@ export const state = (appearance, sentence, nextStep, extra = {}) => ({ appearan
 
 export const ROVO_NOTE =
   'Rovo Chat is not available on this site. Next step: ask a site admin to turn on Rovo; the board, scan and escalations keep working without it.';
+// Shown under the Rovo buttons. On some sites (for example Jira Free) the
+// in-product Ask Rovo panel is missing, so rovo.open() quietly does nothing.
+export const ROVO_HINT =
+  'If Rovo does not open here, go to home.atlassian.com, choose Agents, then Fides. The list below the buttons works without Rovo.';
+
+// Inline fallback for "List upcoming notices": the same rule as the Rovo
+// action (Due, or notice-by within the lookahead), most urgent first.
+export function upcomingInline(agreements, days = 60) {
+  return (agreements || [])
+    .filter((a) => !a.invalid && Number.isFinite(a.daysLeft) && (a.status === 'DUE' || a.daysLeft <= days))
+    .sort((x, y) => x.daysLeft - y.daysLeft)
+    .map((a) => ({
+      issueKey: a.issueKey,
+      vendor: a.vendor,
+      status: a.status,
+      noticeBy: a.noticeBy,
+      noticeByShort: shortDate(a.noticeBy),
+      timing: a.daysLeft < 0 ? `${-a.daysLeft} days ago` : a.daysLeft === 0 ? 'today' : `in ${a.daysLeft} days`,
+    }));
+}
+
 export const CONFLUENCE_NOTE =
   'Fides cannot read Confluence contract pages here yet. Next step: connect Fides to Confluence, or use "Link a page" on an agreement.';
 

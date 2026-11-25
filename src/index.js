@@ -270,6 +270,12 @@ export async function dailyScan(event, context) {
 
 const ctxIssueKey = (payload) => payload?.context?.jira?.issueKey;
 
+// Every issue key an action returns carries its real link on this site, so
+// the agent never has to build one (it once wrote your-domain.atlassian.net).
+const siteUrlOf = (client) => svc.siteBase(client).catch(() => '');
+const issueUrl = (base, key) => (base && key ? `${base}/browse/${key}` : null);
+const LINK_RULE = 'Use only the url fields in this result as links. Never build or guess a link; if a url is missing, give the issue key without a link.';
+
 // Resolve the agreement an action was asked about: name first (exact, then
 // fuzzy), issue key only as a fallback, the page context only when no input
 // was given. Every reply carries `resolved` so the agent confirms the key.
@@ -305,12 +311,12 @@ export async function listUpcomingNotices(payload) {
     const days = Number.isFinite(Number(payload?.days)) && Number(payload.days) > 0 ? Number(payload.days) : DEFAULT_LOOKAHEAD_DAYS;
     const today = todayIso();
     // Jira-backed: the same answer from the Jira and the Confluence install.
-    const [agreements, escalations] = await Promise.all([svc.visibleAgreements(client, { asUser: true }), svc.loadEscalations(client)]);
+    const [agreements, escalations, base] = await Promise.all([svc.visibleAgreements(client, { asUser: true }), svc.loadEscalations(client), siteUrlOf(client)]);
     const escByAgreement = new Map();
     for (const v of escalations) {
       if (!v?.issueKey) continue;
       const id = String(v.agreementId);
-      escByAgreement.set(id, [...(escByAgreement.get(id) || []), { issueKey: v.issueKey, blockerKey: v.blockerKey, dateAtRisk: v.dateAtRisk || null }]);
+      escByAgreement.set(id, [...(escByAgreement.get(id) || []), { issueKey: v.issueKey, url: issueUrl(base, v.issueKey), blockerKey: v.blockerKey, dateAtRisk: v.dateAtRisk || null }]);
     }
     const notices = upcomingNotices(agreements, today, days);
     // Open blockers for Due agreements, and open reviews for the list, so
@@ -324,11 +330,12 @@ export async function listUpcomingNotices(payload) {
         .slice(0, 10)
         .map(async (a) => {
           const b = await svc.findBlockers(client, a).catch(() => []);
-          blockersById.set(String(a.issueId), b.filter((x) => x.statusCategory !== 'done').map((x) => ({ key: x.key, summary: x.summary, status: x.statusName })));
+          blockersById.set(String(a.issueId), b.filter((x) => x.statusCategory !== 'done').map((x) => ({ key: x.key, url: issueUrl(base, x.key), summary: x.summary, status: x.statusName })));
         }),
     ]);
     const list = notices.map((a) => ({
       issueKey: a.issueKey,
+      url: issueUrl(base, a.issueKey),
       vendor: a.vendor,
       status: a.statusLabel,
       noticeBy: a.noticeBy,
@@ -340,7 +347,10 @@ export async function listUpcomingNotices(payload) {
       contractPage: a.confluenceUrl || null,
       escalated: escByAgreement.has(String(a.issueId)),
       escalations: escByAgreement.get(String(a.issueId)) || [],
-      openReview: reviewByKey.get(a.issueKey) || null,
+      openReview: (() => {
+        const r = reviewByKey.get(a.issueKey);
+        return r ? { ...r, url: r.url || issueUrl(base, r.issueKey) } : null;
+      })(),
       openBlockers: blockersById.get(String(a.issueId)) || [],
       noticeByRule: `${a.endDate} minus ${a.noticeDays} days notice = ${a.noticeBy}`,
     }));
@@ -348,6 +358,8 @@ export async function listUpcomingNotices(payload) {
       today,
       lookaheadDays: days,
       rule: 'Due = notice-by within 14 days or past; Upcoming = 15 to 60 days; On track = more than 60 days.',
+      siteUrl: base || null,
+      linkRule: LINK_RULE,
       count: list.length,
       agreements: list,
       disclaimer: DISCLAIMER,
@@ -363,7 +375,7 @@ export async function createReviewIssueAction(payload) {
     const agreements = await svc.visibleAgreements(client, { asUser: true });
     const { a, resolved, ...miss } = resolveForAction(agreements, payload);
     if (!a) return { ...miss, disclaimer: DISCLAIMER };
-    const r = await svc.ensureReviewIssue(client, a, { reason: 'requested in Rovo Chat' });
+    const [r, base] = await Promise.all([svc.ensureReviewIssue(client, a, { reason: 'requested in Rovo Chat' }), siteUrlOf(client)]);
     const summary = reviewResultLine({
       issueKey: a.issueKey,
       vendor: a.vendor,
@@ -375,8 +387,10 @@ export async function createReviewIssueAction(payload) {
       resolved,
       created: r.created,
       reviewIssue: r.issueKey,
-      url: r.url,
+      url: r.url || issueUrl(base, r.issueKey),
       agreement: `${a.issueKey} ${a.vendor}`,
+      agreementUrl: issueUrl(base, a.issueKey),
+      linkRule: LINK_RULE,
       summary,
       note: summary,
       disclaimer: DISCLAIMER,
@@ -404,7 +418,10 @@ export async function escalateThreatenedMilestones(payload) {
       scope = [res.a];
       resolved = res.resolved;
     }
-    const r = await svc.escalateAll(client, scope);
+    const [r, base] = await Promise.all([svc.escalateAll(client, scope), siteUrlOf(client)]);
+    const withUrls = (e) => ({ ...e, url: e.url || issueUrl(base, e.issueKey), agreementUrl: issueUrl(base, e.agreementKey), blockerUrl: issueUrl(base, e.blockerKey) });
+    r.created = r.created.map(withUrls);
+    r.existing = r.existing.map(withUrls);
     const items = [
       ...r.created.map((e) => ({ issueKey: e.agreementKey, vendor: e.vendor, escalationKey: e.issueKey, created: true })),
       ...r.existing.map((e) => ({ issueKey: e.agreementKey, vendor: e.vendor, escalationKey: e.issueKey, created: false })),
@@ -419,6 +436,7 @@ export async function escalateThreatenedMilestones(payload) {
       alreadyEscalated: r.existing,
       errors: r.errors,
       summary,
+      linkRule: LINK_RULE,
       disclaimer: DISCLAIMER,
     };
   } catch (e) {

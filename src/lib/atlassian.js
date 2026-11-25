@@ -330,6 +330,68 @@ export async function pickSpace(client) {
   return spaces.find((s) => s.type !== 'personal') || spaces[0] || null;
 }
 
+// The sample pages need a space. A brand-new Free Confluence site can have
+// none at all (observed on a clean install), so create one Fides space when
+// the caller can see no space. v2 create needs a tenant with role-based
+// access; older tenants take the v1 endpoint. Reuses a FIDES space that
+// already exists (for example one the caller could not list).
+export const FIDES_SPACE = { key: 'FIDES', name: 'Fides contracts' };
+const SPACE_DESC = 'Vendor contract pages tracked by Fides. Created by Fides because this site had no Confluence space.';
+
+export async function getSpaceByKey(client, key) {
+  const res = await call(client, 'confluence', route`/wiki/api/v2/spaces?keys=${key}&limit=1`);
+  return res?.results?.[0] || null;
+}
+
+export async function createSpace(client, { key = FIDES_SPACE.key, name = FIDES_SPACE.name } = {}) {
+  try {
+    const res = await call(client, 'confluence', route`/wiki/api/v2/spaces`, {
+      method: 'POST',
+      body: { key, name, description: { value: SPACE_DESC, representation: 'plain' } },
+    });
+    if (res?.id) return res;
+  } catch (e) {
+    const existing = await getSpaceByKey(client, key).catch(() => null);
+    if (existing) return existing;
+    if (e.forbidden) throw e;
+  }
+  try {
+    const res = await call(client, 'confluence', route`/wiki/rest/api/space`, {
+      method: 'POST',
+      body: { key, name, description: { plain: { value: SPACE_DESC, representation: 'plain' } } },
+    });
+    return res?.id ? { ...res, id: String(res.id) } : null;
+  } catch (e) {
+    const existing = await getSpaceByKey(client, key).catch(() => null);
+    if (existing) return existing;
+    throw e;
+  }
+}
+
+// pickSpace, else create the Fides space. Tries each client in order (the
+// signed-in user first, so the person who opened the board owns the space,
+// then the app). Returns null when Confluence is unreachable or nobody may
+// create spaces; never throws.
+export async function ensureSpace(clients) {
+  const list = (Array.isArray(clients) ? clients : [clients]).filter(Boolean);
+  for (const c of list) {
+    const sp = await pickSpace(c).catch(() => undefined);
+    if (sp) return sp;
+  }
+  for (const c of list) {
+    try {
+      const sp = await createSpace(c);
+      if (sp?.id) {
+        console.log(`Fides: created Confluence space ${sp.key || FIDES_SPACE.key} (id ${sp.id}) for the sample pages`);
+        return sp;
+      }
+    } catch (e) {
+      console.warn(`Fides: could not create a Confluence space: ${e.message}`);
+    }
+  }
+  return null;
+}
+
 export async function createPage(client, { spaceId, title, storage }) {
   const res = await call(client, 'confluence', route`/wiki/api/v2/pages`, {
     method: 'POST',
