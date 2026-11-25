@@ -20,6 +20,6 @@ test('inline upcoming list: Due and within 60 days, most urgent first', () => {
 
 test('agent prompt never carries a placeholder domain and forbids guessed links', () => {
   const p = readFileSync(new URL('../static/agent/prompt.txt', import.meta.url), 'utf8');
-  assert.ok(!/https?:\/\/your-domain/i.test(p));
+  assert.ok(!/your-domain|example\.atlassian/i.test(p));
   assert.match(p, /Never write a placeholder or guessed domain/);
 });

@@ -4,7 +4,7 @@ Fluid submits. No agent submits or posts. Deadline: **Tue 22 Dec 2026, 9:00 PM W
 
 The field-by-field paste copy (with the Sharing link filled) lives on the box at `/workspace/hackathon-ideas/codegeist2026/devpost-fields.md`. This file stays in the private repo and must not contain the Sharing URL.
 
-Live product (keys are for the demo site, not a judge install): production **2.11.0** (commit e51ae26, 163 tests, `forge lint` clean) on `one-atlas-wptq.atlassian.net`. Board: **1 Due / 2 Upcoming / 1 On track**. Helios Payroll CLSD-35 (Due, notice-by 2026-11-24, end 2026-12-24, blocker CLSD-39, escalation CLSD-40, review CLSD-41); Northwind Analytics CLSD-36 (notice-by 2027-01-02); Larkspur Facilities CLSD-37 (notice-by 2026-12-13, review CLSD-45); Quay Support CLSD-38 (notice-by 2027-03-18). Highest key: CLSD-45.
+Live product (keys are for the demo site, not a judge install): production **3.1.0** (169 tests, `forge lint` clean) on `one-atlas-wptq.atlassian.net`. Board: **1 Due / 2 Upcoming / 1 On track**. Helios Payroll CLSD-35 (Due, notice-by 2026-11-24, end 2026-12-24, blocker CLSD-39, escalation CLSD-40, review CLSD-41); Northwind Analytics CLSD-36 (notice-by 2027-01-02); Larkspur Facilities CLSD-37 (notice-by 2026-12-13, review CLSD-45); Quay Support CLSD-38 (notice-by 2027-03-18). Highest key: CLSD-45.
 
 ---
 
@@ -55,7 +55,7 @@ Fides tracks dates and obligations; it is not legal advice.
 - `jira:globalPage` (UI Kit, native render): the notice board.
 - `jira:issuePanel`: notice status on agreement, review, blocker and escalation issues.
 - `scheduledTrigger` (`interval: day`) using `api.asApp()`, with caught errors and a visible last-run stamp.
-- `trigger` on `avi:forge:installed:app` for judge mode, with retry while app permissions propagate.
+- `trigger` on `avi:forge:installed:app` and `avi:forge:upgraded:app` for judge mode and page heals, with retry while app permissions propagate.
 - `rovo:agent` **Fides** with six actions: `list-upcoming-notices` (List upcoming notices, GET), `create-review-issue` (Create or reuse review issue, CREATE), `escalate-threatened-milestones` (Create or reuse escalation, CREATE), `draft-brief` (Draft renew or cancel brief, GET), `check-agreement-from-page` (Check contract page, GET) and `track-agreement-from-page` (Track agreement from page, CREATE).
 - Jira issue properties and labels as the source of truth. Forge Key-Value Store (`@forge/kvs`) as a per-install cache and for short-lived idempotency claims. No external hosting.
 - Jira REST v3 (issues, links, remote links, JQL search, bulk fetch) and Confluence REST v2 (pages, spaces).
@@ -73,7 +73,7 @@ Fides tracks dates and obligations; it is not legal advice.
 - One status rule shared by the board, the scan and the agent, with boundary tests (today, past, 14/15, 60/61, leap years).
 - A permission-aware agent that says plainly when it cannot read a contract page.
 - On the live demo site, a second review or escalation request reuses the open issue (Helios review CLSD-41, Larkspur review CLSD-45, Helios escalation CLSD-40) instead of opening a duplicate.
-- Production 2.11.0: 163 tests, `forge lint` clean.
+- Production 3.1.0: 169 tests, `forge lint` clean. Clean install tested on a new Free site.
 
 ## What's next
 
@@ -81,9 +81,12 @@ Obligation reminders beyond notice dates, and per-project boards.
 
 ## Judge setup
 
-1. Install from the Sharing link.
-2. Open **Apps > Fides** in Jira. Sample agreements, a blocker and an escalation appear automatically.
-3. Use the **Ask Fides in Rovo** buttons or open Rovo Chat and pick **Fides**. Rovo Chat must be enabled on the site.
+1. Install from the Sharing link on a site where you are an admin, for both Jira and Confluence (the link offers both).
+2. Open **Apps > Fides** in Jira. Sample agreements load automatically on install or on this first open; there is no button to press. Within about ten seconds the board shows **1 Due** (Helios Payroll, with one open blocker and one escalation issue), **2 Upcoming** and **1 On track**, each linked to a sample Confluence contract page. If your Confluence has no space yet (a new Free site starts with none), Fides creates one called **Fides contracts** for the sample pages.
+3. Use the **Ask Fides in Rovo** buttons on the board, or open Rovo and choose **Fides**. If Jira has no Ask Rovo button (for example on Jira Free), go to **home.atlassian.com**, choose **Agents**, then **Fides**. **List upcoming notices** also shows the list right on the board, with or without Rovo.
+4. Try the six actions: **List upcoming notices**, **Create or reuse review issue**, **Create or reuse escalation**, **Draft renew or cancel brief**, **Check contract page** and **Track agreement from page**. Asking a second time for a review or an escalation reuses the open issue instead of creating a duplicate.
+
+Two **Fides** entries in the Rovo agent picker are expected, one per product install. Both give the same answers, because Fides reads everything from Jira.
 
 ## Built with
 

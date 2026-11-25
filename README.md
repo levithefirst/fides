@@ -8,7 +8,7 @@ Fides (FY-deez) is a Forge app for Jira, Confluence and Rovo. It is for legal, p
 
 Codegeist 2026 · Track: **Apps for Business Teams** · Bonus: **Best Agents** (`rovo:agent` + six `action` modules)
 
-Production **2.11.0** (commit e51ae26, 163 tests, `forge lint` clean). The private demo site is `one-atlas-wptq.atlassian.net` (board: 1 Due / 2 Upcoming / 1 On track). Live samples: Helios Payroll CLSD-35 (Due, notice-by 2026-11-24, end 2026-12-24, blocker CLSD-39, escalation CLSD-40, review CLSD-41), Northwind Analytics CLSD-36 (notice-by 2027-01-02), Larkspur Facilities CLSD-37 (notice-by 2026-12-13, review CLSD-45), Quay Support CLSD-38 (notice-by 2027-03-18). Highest key: CLSD-45. Judges install from the Sharing link (see Devpost) and get their own issue keys.
+Production **3.1.0** (169 tests, `forge lint` clean; clean-install tested on a new Free site, Nov 25 2026). The private demo site is `one-atlas-wptq.atlassian.net` (board: 1 Due / 2 Upcoming / 1 On track). Live samples: Helios Payroll CLSD-35 (Due, notice-by 2026-11-24, end 2026-12-24, blocker CLSD-39, escalation CLSD-40, review CLSD-41), Northwind Analytics CLSD-36 (notice-by 2027-01-02), Larkspur Facilities CLSD-37 (notice-by 2026-12-13, review CLSD-45), Quay Support CLSD-38 (notice-by 2027-03-18). Highest key: CLSD-45. Judges install from the Sharing link (see Devpost) and get their own issue keys.
 
 > Fides tracks dates and obligations; it is not legal advice.
 
@@ -74,7 +74,8 @@ Clean-site states, each with a clear message:
 
 | Situation | One sentence | Next step |
 | --- | --- | --- |
-| No Rovo Chat on the site | "Rovo Chat is not available on this site." Board, scan and escalations keep working; Ask buttons are disabled. | Ask a site admin to turn on Rovo. |
+| No Rovo Chat on the site | "Rovo Chat is not available on this site." Board, scan and escalations keep working; Ask buttons are disabled except **List upcoming notices**, which shows the list on the board. | Ask a site admin to turn on Rovo. |
+| Rovo on, but no Ask Rovo in Jira (Jira Free) | A hint under the buttons points to home.atlassian.com > Agents > Fides; **List upcoming notices** shows the list on the board. | Open Rovo from home.atlassian.com. |
 | No Confluence, or a page you cannot read | "Fides cannot read Confluence contract pages here yet." / "I cannot read this page." | Connect Fides to Confluence, or use **Link a page**. |
 | Non-admin user | Board works normally with your permissions. | Admin-only choices (picking the project) become "Ask a Jira admin to ...". |
 | No Create issues in the Fides project | "You can view agreements but cannot create issues in OPS." Board is read-only. | Ask a Jira admin for the Create issues permission in OPS. |
@@ -105,29 +106,24 @@ The board paints from your own last snapshot (one storage read, no Jira calls), 
 
 ## Judge setup (fresh site, zero manual steps)
 
-1. Install Fides from the Sharing installation link on your site.
-2. Open **Apps > Fides** in Jira.
-3. **Judge mode** seeds on this first board open (idempotently, as you), unless the install trigger already did it in the background:
-   - four sample agreements with dates computed from today: Helios Payroll (**Due**), Larkspur Facilities and Northwind Analytics (**Upcoming**), Quay Support (**On track**);
-   - sample Confluence contract pages, if Confluence is available to the app;
-   - one open blocker on Helios Payroll ("Approval pending: finance sign-off ...");
-   - the **escalation issue** for it, created immediately, not on the next daily run;
-   - a review issue for the Due agreement.
+1. Install from the Sharing link on a site where you are an admin, for both Jira and Confluence (the link offers both).
+2. Open **Apps > Fides** in Jira. Sample agreements load automatically on install or on this first open; there is no button to press. Within about ten seconds the board shows **1 Due** (Helios Payroll, with one open blocker and one escalation issue), **2 Upcoming** and **1 On track**, each linked to a sample Confluence contract page. If your Confluence has no space yet (a new Free site starts with none), Fides creates one called **Fides contracts** for the sample pages.
+3. Use the **Ask Fides in Rovo** buttons on the board, or open Rovo and choose **Fides**. If Jira has no Ask Rovo button (for example on Jira Free), go to **home.atlassian.com**, choose **Agents**, then **Fides**. **List upcoming notices** also shows the list right on the board, with or without Rovo.
+4. Try the six actions: **List upcoming notices**, **Create or reuse review issue**, **Create or reuse escalation**, **Draft renew or cancel brief**, **Check contract page** and **Track agreement from page**. Asking a second time for a review or an escalation reuses the open issue instead of creating a duplicate.
 
-   The samples are created **once per site**, even if you install Fides on both Jira and Confluence, uninstall and reinstall, or open the board while the install is still running. Jira is the source of truth: Fides finds its existing sample issues by label and reuses them instead of creating new ones. Only the Jira install seeds; the Confluence install only links the contract pages, and rewrites a sample page in place (same page) if its dates are older than the agreement in Jira.
-4. The board shows all of this, plus the escalation message, within about 10 seconds.
-5. Click **Is Helios at risk, and what should I do?** under the spotlight, or open Rovo Chat, choose **Fides** and pick that conversation starter.
-6. Open the sample contract page for Helios Payroll in Confluence, open Rovo there and say "Track this contract". Fides says it is **already tracked** and names the same issue key the Jira board shows, without a confirmation card (the check is read-only). Try it on any other contract page to see a proposal with quoted sources.
+Two **Fides** entries in the Rovo agent picker are expected, one per product install. Both give the same answers, because Fides reads everything from Jira.
 
-**Rovo gives the same answers from Jira and Confluence.** Fides reads agreements, blockers, reviews and escalations from Jira (labels, issue links and an issue property), not from one product's app storage, so "List upcoming notices" and every other action agree wherever Rovo is opened. The agent picker shows **two "Fides" entries** on a site where Fides is installed on both Jira and Confluence: that is expected (one per product install), and both give the same answers.
-7. Click **Import agreements**, paste two rows from a spreadsheet, preview, import.
+What happens underneath: judge mode seeds once per site (install trigger in the background, or the first board open, whichever is first), with dates computed from today, a review issue for the Due agreement and the escalation created immediately, not on the next daily run. Jira is the source of truth, so installing on both products, reinstalling or opening the board mid-install reuses the existing samples. Only the Confluence install trigger, the board open and the daily Confluence run create sample pages (the Jira install trigger only links existing ones, because the two installs have separate app storage and cannot share a lock). A sample page whose dates are older than Jira is rewritten in place.
+
+5. Open the Helios Payroll sample contract page in Confluence, open Rovo there and say "Track this contract". Fides says it is **already tracked** and names the same issue key the board shows, without a confirmation card.
+6. Click **Import agreements**, paste two rows from a spreadsheet, preview, import.
 
 Notes:
 
 - If Fides is connected to Confluence after Jira, the next board open (or the Confluence install event) links the sample agreements to their contract pages without creating duplicate pages.
-- Seeding is safe to re-run and **skips when real data exists** (any `fides-agreement` issue without the `fides-sample` label, or any non-sample agreement in Fides). The **Load samples** button is an explicit request and seeds anyway, still without duplicates.
+- Seeding is safe to re-run and **skips when real data exists** (any `fides-agreement` issue without the `fides-sample` label, or any non-sample agreement in Fides). The **Load samples** button appears only on an empty board (for example after real data made seeding skip); it is an explicit request and seeds anyway, still without duplicates.
 - Fides picks the first project on the site where it can create a standard issue type (Task, or the site's default). If there is none, the board shows a project picker.
-- Rovo Chat must be enabled on the site. Classic `*-dev.atlassian.net` sites often lack it; use a site from `forge site provision`.
+- Rovo must be available on the site. On Jira Free there is no Ask Rovo button in Jira: use home.atlassian.com > Agents > Fides. Classic `*-dev.atlassian.net` sites often lack Rovo; use a site from `forge site provision`.
 - If the app cannot use Confluence on your site, agreements and escalations still seed and the board offers **Link a page**.
 
 ## Developer setup
@@ -192,6 +188,7 @@ scripts/              Manifest validation and a live acceptance poll
 | `read:page:confluence` | Read the contract page for the brief; find sample pages |
 | `write:page:confluence` | Create sample contract pages in judge mode |
 | `read:space:confluence` | Pick a space for sample pages |
+| `write:space:confluence` | Create the **Fides contracts** space when the site has no Confluence space (new Free sites) |
 
 ## Evidence
 
@@ -216,7 +213,7 @@ Only these figures are cited:
 - [x] Daily `scheduledTrigger` (`interval: day`) is in the manifest and wired; errors are caught; last run is visible.
 - [x] Unit tests for date and status rules, the RED window, blocker open/closed and idempotency pass in CI.
 - [ ] Judge mode: seeded board plus escalation visible within 10 seconds of **opening the board** after a fresh install. First live run: board in 8.8 s with all four agreements and the escalation; rerun the official check (`docs/HANDOFF.md` step 8A) after the latest redeploy. Install-time seeding is best effort (it waits for app permissions, 47 s on the first run).
-- [ ] Sample agreements link to their Confluence contract pages, including when Confluence is connected after Jira. **Fixed in code (backfill); confirm live after redeploy.**
+- [x] Sample agreements link to their Confluence contract pages, including on a new Free site with no Confluence space (verified on a clean site, Nov 25 2026).
 - [ ] `track-agreement-from-page` proposes with quoted sources, creates only on confirm, and returns the existing agreement on a second run. **Tested offline; confirm live (HANDOFF 8G).**
 - [ ] Import agreements: preview with per-row errors, duplicates skipped, created / skipped / failed per row. **Tested offline; confirm live.**
 - [ ] Review and escalation issues assigned to the owner (or agreement assignee), owner added as watcher, "Owner notified via Jira" on the board. **Tested offline; confirm live.**
