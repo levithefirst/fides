@@ -8,7 +8,7 @@ Fides (FY-deez) is a Forge app for Jira, Confluence and Rovo. It is for legal, p
 
 Codegeist 2026 · Track: **Apps for Business Teams** · Bonus: **Best Agents** (`rovo:agent` + six `action` modules)
 
-Production **3.1.0** (169 tests, `forge lint` clean; clean-install tested on a new Free site, Nov 25 2026). The private demo site is `one-atlas-wptq.atlassian.net` (board: 1 Due / 2 Upcoming / 1 On track). Live samples: Helios Payroll CLSD-35 (Due, notice-by 2026-11-24, end 2026-12-24, blocker CLSD-39, escalation CLSD-40, review CLSD-41), Northwind Analytics CLSD-36 (notice-by 2027-01-02), Larkspur Facilities CLSD-37 (notice-by 2026-12-13, review CLSD-45), Quay Support CLSD-38 (notice-by 2027-03-18). Highest key: CLSD-45. Judges install from the Sharing link (see Devpost) and get their own issue keys.
+Production **3.2.0** (169 tests, `forge lint` clean; clean-install tested on a new Free site, Nov 25 2026). The private demo site is `one-atlas-wptq.atlassian.net` (board: 1 Due / 2 Upcoming / 1 On track). Live samples: Helios Payroll CLSD-35 (Due, notice-by 2026-11-24, end 2026-12-24, blocker CLSD-39, escalation CLSD-40, review CLSD-41), Northwind Analytics CLSD-36 (notice-by 2027-01-02), Larkspur Facilities CLSD-37 (notice-by 2026-12-13, review CLSD-45), Quay Support CLSD-38 (notice-by 2027-03-18). Highest key: CLSD-45. Judges install from the Sharing link (see Devpost) and get their own issue keys.
 
 > Fides tracks dates and obligations; it is not legal advice.
 

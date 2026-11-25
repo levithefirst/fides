@@ -4,7 +4,7 @@ Fluid submits. No agent submits or posts. Deadline: **Tue 22 Dec 2026, 9:00 PM W
 
 The field-by-field paste copy (with the Sharing link filled) lives on the box at `/workspace/hackathon-ideas/codegeist2026/devpost-fields.md`. This file stays in the private repo and must not contain the Sharing URL.
 
-Live product (keys are for the demo site, not a judge install): production **3.1.0** (169 tests, `forge lint` clean) on `one-atlas-wptq.atlassian.net`. Board: **1 Due / 2 Upcoming / 1 On track**. Helios Payroll CLSD-35 (Due, notice-by 2026-11-24, end 2026-12-24, blocker CLSD-39, escalation CLSD-40, review CLSD-41); Northwind Analytics CLSD-36 (notice-by 2027-01-02); Larkspur Facilities CLSD-37 (notice-by 2026-12-13, review CLSD-45); Quay Support CLSD-38 (notice-by 2027-03-18). Highest key: CLSD-45.
+Live product (keys are for the demo site, not a judge install): production **3.2.0** (169 tests, `forge lint` clean) on `one-atlas-wptq.atlassian.net`. Board: **1 Due / 2 Upcoming / 1 On track**. Helios Payroll CLSD-35 (Due, notice-by 2026-11-24, end 2026-12-24, blocker CLSD-39, escalation CLSD-40, review CLSD-41); Northwind Analytics CLSD-36 (notice-by 2027-01-02); Larkspur Facilities CLSD-37 (notice-by 2026-12-13, review CLSD-45); Quay Support CLSD-38 (notice-by 2027-03-18). Highest key: CLSD-45.
 
 ---
 
@@ -73,7 +73,7 @@ Fides tracks dates and obligations; it is not legal advice.
 - One status rule shared by the board, the scan and the agent, with boundary tests (today, past, 14/15, 60/61, leap years).
 - A permission-aware agent that says plainly when it cannot read a contract page.
 - On the live demo site, a second review or escalation request reuses the open issue (Helios review CLSD-41, Larkspur review CLSD-45, Helios escalation CLSD-40) instead of opening a duplicate.
-- Production 3.1.0: 169 tests, `forge lint` clean. Clean install tested on a new Free site.
+- Production 3.2.0: 169 tests, `forge lint` clean. Clean install tested on a new Free site.
 
 ## What's next
 
